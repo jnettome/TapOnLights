@@ -24,6 +24,8 @@ Base URL: {{BASE_URL}}
 | POST | /api/scenes/apply | `{"name": "Relax", "targets": [...]}` | 204 |
 | POST | /api/scenes | `{"name": "Movie", "scene": {"brightness": 20, "color": null, "temperature": 2700}}` | 204 (saves a custom scene) |
 | DELETE | /api/scenes/{name} | — | 204 (deletes a custom scene) |
+| POST | /api/effects/start | `{"name": "candle", "targets": [...], "options": {...}}` | 204 (see Effects) |
+| POST | /api/effects/stop | `{"targets": [...]}` | 204 (looping effects restore the earlier look) |
 | POST | /api/refresh | — | 204 (re-read every bulb now) |
 | GET | /api/events | — | server-sent events; a `snapshot` event with the full state on every change |
 | GET | /api/settings | — | 200: bulbs list (IP, name, room) and theme |
@@ -50,6 +52,24 @@ All fields are optional, but at least one is required:
 - **White tones (kelvin):** candlelight 2500, warm 2700, soft 3000, neutral 4000, cool 5000, daylight 6500.
 - **Brightness:** night light 5–15, relaxed 30–50, normal 70–90, full 100.
 
+## Effects
+
+Animations that run inside the app; you don't need to keep sending requests. Names and options (all optional):
+
+| Name | Effect | Options |
+|---|---|---|
+| `breathe` | brightness rises and falls slowly | `period` 3–60 s (default 8), `brightness` peak |
+| `candle` | warm flicker | `brightness` base (default 60) |
+| `colorLoop` | slow drift around the color wheel | `period` 10–600 s (default 60), `saturation` |
+| `sunrise` | 1% / 2500 K up to full brightness at 4000 K | `minutes` 0.5–120 (default 15), `brightness` final |
+| `sunset` | down to 1% / 2500 K, then off | `minutes` 0.5–120 (default 15) |
+| `alert` | colored pulses, then back to the earlier look | `hue` (default 0, red), `saturation`, `times` 1–10 (default 3) |
+
+- Any manual change to a bulb (`/api/command`, a scene) stops its effect.
+- `/api/effects/stop` restores the earlier look for `breathe`, `candle` and `colorLoop`.
+- Each bulb's `effect` field in the snapshot shows what's running.
+- Prefer these over fast loops of `/api/command`: they're smoother and gentler on the bulbs.
+
 ## Snapshot fields
 
 - **`bulbs[]`:**
@@ -59,6 +79,7 @@ All fields are optional, but at least one is required:
   - `mode`: `white` or `color`
   - `temperature`, `hue`, `saturation` (the last values set, whichever mode is active)
   - `signal`: Wi-Fi signal level, 0–3
+  - `effect`: the running effect, or null
 - **`scenes[]`:** `name`, `builtin`, `brightness`, `temperature` (or null), `color` (or null).
 - **Also:** `temperatureRange`, and `web` (the server's status).
 
@@ -83,6 +104,9 @@ curl -X POST {{BASE_URL}}/api/command -H "Content-Type: application/json" -d '{"
 
 # A scene everywhere
 curl -X POST {{BASE_URL}}/api/scenes/apply -H "Content-Type: application/json" -d '{"name": "Relax", "targets": []}'
+
+# Wake-up light over 20 minutes in the Bedroom
+curl -X POST {{BASE_URL}}/api/effects/start -H "Content-Type: application/json" -d '{"name": "sunrise", "targets": ["Bedroom"], "options": {"minutes": 20}}'
 
 # With a password (any username)
 curl -u "me:PASSWORD" {{BASE_URL}}/api/snapshot

@@ -2,7 +2,7 @@
 // when the same UI is served by the built-in web server.
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Patch, SceneInput, SettingsUpdate, SettingsView, Snapshot } from "./types";
+import type { EffectName, EffectOptions, Patch, SceneInput, SettingsUpdate, SettingsView, Snapshot } from "./types";
 
 export interface Api {
   desktop: boolean;
@@ -10,6 +10,8 @@ export interface Api {
   subscribe(onSnapshot: (s: Snapshot) => void, onConnection?: (ok: boolean) => void): () => void;
   command(targets: string[], patch: Patch): Promise<void>;
   refresh(): Promise<void>;
+  startEffect(name: EffectName, targets: string[], options?: EffectOptions): Promise<void>;
+  stopEffects(targets: string[]): Promise<void>;
   applyScene(name: string, targets: string[]): Promise<void>;
   saveScene(name: string, scene: SceneInput): Promise<void>;
   deleteScene(name: string): Promise<void>;
@@ -39,6 +41,8 @@ function tauriApi(): Api {
     subscribe: (onSnapshot) => tauriListen<Snapshot>("snapshot", onSnapshot),
     command: (targets, patch) => invoke("command", { targets, patch }),
     refresh: () => invoke("refresh"),
+    startEffect: (name, targets, options) => invoke("start_effect", { name, targets, options: options ?? null }),
+    stopEffects: (targets) => invoke("stop_effects", { targets }),
     applyScene: (name, targets) => invoke("apply_scene", { name, targets }),
     saveScene: (name, scene) => invoke("save_scene", { name, scene }),
     deleteScene: (name) => invoke("delete_scene", { name }),
@@ -88,6 +92,8 @@ function httpApi(): Api {
     },
     command: (targets, patch) => http("POST", "/api/command", { targets, patch }),
     refresh: () => http("POST", "/api/refresh"),
+    startEffect: (name, targets, options) => http("POST", "/api/effects/start", { name, targets, options: options ?? {} }),
+    stopEffects: (targets) => http("POST", "/api/effects/stop", { targets }),
     applyScene: (name, targets) => http("POST", "/api/scenes/apply", { name, targets }),
     saveScene: (name, scene) => http("POST", "/api/scenes", { name, scene }),
     deleteScene: (name) => http("DELETE", `/api/scenes/${encodeURIComponent(name)}`),

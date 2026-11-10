@@ -7,6 +7,7 @@ When the web page is on, TapOnLights serves a small JSON API next to it. The web
 - [Endpoints](#endpoints)
 - [Choosing bulbs: targets](#choosing-bulbs-targets)
 - [Changing lights: the patch](#changing-lights-the-patch)
+- [Effects](#effects)
 - [The snapshot](#the-snapshot)
 - [Live updates](#live-updates)
 - [Errors](#errors)
@@ -40,6 +41,8 @@ The server only answers requests addressed to an IP address or `localhost`; any 
 | `POST` | `/api/scenes/apply` | `{"name": "Relax", "targets": [...]}` | `204` |
 | `POST` | `/api/scenes` | `{"name": "Movie", "scene": {"brightness": 20, "color": null, "temperature": 2700}}` | `204`; saves or replaces a custom scene |
 | `DELETE` | `/api/scenes/{name}` | — | `204`; deletes a custom scene (built-in scenes can't be deleted) |
+| `POST` | `/api/effects/start` | `{"name": "candle", "targets": [...], "options": {...}}` | `204`; see [Effects](#effects) |
+| `POST` | `/api/effects/stop` | `{"targets": [...]}` | `204`; looping effects put the lights back to how they were |
 | `POST` | `/api/refresh` | — | `204`; re-reads every bulb now instead of waiting for the next 10 s poll |
 | `GET` | `/api/settings` | — | `200`: bulbs (`ip`, `name`, `room`), theme and other preferences |
 | `PUT` | `/api/settings` | `{"devices": [{"ip", "name", "room"}, ...], "theme": "system"}` | `200`; **replaces the whole bulb list**. `theme` is `system`, `light` or `dark`. |
@@ -80,6 +83,36 @@ Useful values:
 - **Hue:** red 0, orange 25, amber 40, yellow 55, lime 90, green 120, teal 170, cyan 185, blue 220, indigo 250, purple 275, magenta 300, pink 330.
 - **Saturation:** 100 for vivid colors, 40–70 for pastels.
 
+## Effects
+
+Effects run inside the app. It computes each step and sends it to the bulbs, so nothing needs to stay connected to the API.
+
+| `name` | What it does | `options` (all optional) |
+|---|---|---|
+| `breathe` | Brightness rises and falls slowly, in the current color | `period` seconds per breath (3–60, default 8), `brightness` peak |
+| `candle` | Warm, flickering flame | `brightness` base level (default 60) |
+| `colorLoop` | Drifts around the color wheel; multiple bulbs are spread a little apart | `period` seconds per loop (10–600, default 60), `saturation` (default 100) |
+| `sunrise` | Fades up from 1% at 2500 K to full brightness at 4000 K, then stays there | `minutes` (0.5–120, default 15), `brightness` final level (default 100) |
+| `sunset` | Fades down to 1% at 2500 K, then turns the lights off | `minutes` (0.5–120, default 15) |
+| `alert` | Pulses a color a few times, then puts the lights back to how they were | `hue` (default 0, red), `saturation`, `times` (1–10, default 3) |
+
+```sh
+curl -X POST http://localhost:4530/api/effects/start -H "Content-Type: application/json" \
+     -d '{"name": "sunrise", "targets": ["Bedroom"], "options": {"minutes": 20}}'
+
+curl -X POST http://localhost:4530/api/effects/start -H "Content-Type: application/json" \
+     -d '{"name": "alert", "options": {"hue": 120, "times": 2}}'      # green double pulse, all bulbs
+```
+
+How effects behave:
+
+- **One effect per bulb.** Starting one replaces whatever ran there. If the old one was a looping effect, the bulb first goes back to its earlier look, which becomes the starting point.
+- **A manual change stops the effect on that bulb.** Any change from the app, the web page, a scene or `/api/command` stops it right there and keeps the new setting.
+- **Stopping** with `/api/effects/stop`, or the Stop button, puts bulbs running `breathe`, `candle` or `colorLoop` back to how they were before. `sunrise` and `sunset` stay where they are.
+- **Only online bulbs take part.** If none of the targets is online, the request returns `400`.
+- **What's running** is each bulb's `effect` field in the snapshot (`null` when none).
+- **Gentle on the bulbs:** at most 3 changes per second per bulb (about a third of what an L530 accepts), and nothing is sent when a value doesn't change. `sunrise` and `sunset` send at most one change per second.
+
 ## The snapshot
 
 ```json
@@ -99,12 +132,13 @@ Useful values:
       "hue": 145,
       "saturation": 75,
       "temperature": 4000,
-      "signal": 2
+      "signal": 2,
+      "effect": null
     }
   ],
   "scenes": [
     { "name": "Focus", "builtin": true, "brightness": 95, "temperature": 4200, "color": null },
-    { "name": "Sunset", "builtin": true, "brightness": 48, "temperature": null, "color": { "hue": 20, "saturation": 85 } }
+    { "name": "Dusk", "builtin": true, "brightness": 48, "temperature": null, "color": { "hue": 20, "saturation": 85 } }
   ],
   "theme": "system",
   "web": { "enabled": true, "running": true, "lan": false, "hasPassword": false,
@@ -118,6 +152,7 @@ Useful values:
 - **`status`:** `online`, `connecting`, `offline` (unreachable) or `authError` (sign-in rejected). `error` explains any status other than `online`. Bulbs that aren't online don't respond until the app reconnects, which it retries every 15 s.
 - **`mode`:** whether the bulb shows white (`temperature` applies) or color (`hue` and `saturation` apply). The inactive values are the last ones used.
 - **`signal`:** Wi-Fi signal level reported by the bulb.
+- **`effect`:** the [effect](#effects) running on the bulb (`breathe`, `candle`, `colorLoop`, `sunrise`, `sunset` or `alert`), or `null`.
 - **`backdrop`:** whether the desktop popup uses the Windows 11 background; scripts can ignore it.
 
 ## Live updates

@@ -56,6 +56,8 @@ pub struct BulbView {
     pub saturation: u8,
     pub temperature: u16,
     pub signal: Option<u8>,
+    /// The effect running on this bulb, if any (filled in by `core::snapshot`).
+    pub effect: Option<crate::effects::EffectName>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
@@ -270,6 +272,7 @@ impl Manager {
                 saturation: 100,
                 temperature: 3000,
                 signal: None,
+                effect: None,
             }),
             generation: AtomicU64::new(0),
             tx,

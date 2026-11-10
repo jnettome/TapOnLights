@@ -14,6 +14,7 @@ A fast, local tray app for TP-Link Tapo smart bulbs on Windows. Click the tray i
 
 - **Instant control.** Each bulb keeps one open connection, the UI updates the moment you move a control, and while you drag only the latest value is sent. A change reaches the bulb in about 100–135 ms.
 - **Everything the bulbs do day to day:** power, brightness, white temperature (2500–6500 K) with presets, a color wheel with quick swatches, and scenes (six built in, plus your own).
+- **Effects:** breathe, candle flicker, color loop, sunrise and sunset fades (5–60 minutes, or up to 120 from the API), and an alert pulse that puts the lights back afterwards. They run in the app, use at most 3 changes per second per bulb, and stop as soon as you change a light.
 - **Rooms and groups.** Control all lights, a room, or one bulb; the list shows each bulb's state with its own switch.
 - **Stays in sync.** Changes made in the Tapo phone app show up within about 10 seconds.
 - **Optional web page and API.** Serve the same controls to a browser, on this PC only or to your phone on the home network, with an optional password. Script it, automate it, or let an AI assistant drive it.

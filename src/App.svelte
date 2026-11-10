@@ -2,9 +2,9 @@
   import { onMount } from "svelte";
   import { api, errorText, throttle } from "./lib/api";
   import { hueSatCss, kelvinCss, TEMPERATURE_TRACK } from "./lib/color";
-  import type { Bulb, HueSat, Mode, Patch, Scene, Snapshot, Theme } from "./lib/types";
+  import type { Bulb, EffectName, HueSat, Mode, Patch, Scene, Snapshot, Theme } from "./lib/types";
   import ColorWheel from "./components/ColorWheel.svelte";
-  import Icon from "./components/Icon.svelte";
+  import Icon, { type IconName } from "./components/Icon.svelte";
   import Settings from "./components/Settings.svelte";
   import Slider from "./components/Slider.svelte";
   import Toggle from "./components/Toggle.svelte";
@@ -25,7 +25,18 @@
     { name: "Daylight", kelvin: 6500 },
   ];
 
+  const EFFECTS: { name: EffectName; label: string; icon: IconName; fade?: boolean; hint: string }[] = [
+    { name: "breathe", label: "Breathe", icon: "wind", hint: "Brightness rises and falls slowly" },
+    { name: "candle", label: "Candle", icon: "flame", hint: "A warm, flickering flame" },
+    { name: "colorLoop", label: "Color loop", icon: "rainbow", hint: "Drifts slowly around the color wheel" },
+    { name: "sunrise", label: "Sunrise", icon: "sunrise", fade: true, hint: "Fades up from a dim warm glow to bright white" },
+    { name: "sunset", label: "Sunset", icon: "sunset", fade: true, hint: "Fades down to a warm glow, then turns off" },
+    { name: "alert", label: "Alert", icon: "bell", hint: "Three red pulses, then back to how it was" },
+  ];
+  const FADE_MINUTES = [5, 15, 30, 60];
+
   let snap = $state<Snapshot | null>(null);
+  let fadeMinutes = $state(15);
   let view = $state<"main" | "settings">("main");
   let target = $state("all");
   let themePreview = $state<Theme | null>(null);
@@ -62,6 +73,8 @@
   const authProblem = $derived(bulbs.find((b) => b.status === "authError") ?? null);
   const disabled = $derived(reachable.length === 0);
   const range = $derived(snap?.temperatureRange ?? [2500, 6500]);
+  const runningEffects = $derived(new Set(selected.map((b) => b.effect).filter((e): e is EffectName => !!e)));
+  const effectLabel = (name: EffectName) => EFFECTS.find((e) => e.name === name)?.label ?? name;
 
   $effect(() => {
     if (snap && target !== "all" && selected.length === 0) target = "all";
@@ -183,6 +196,16 @@
     api.deleteScene(s.name).catch((e) => showToast(errorText(e)));
   }
 
+  function toggleEffect(effect: (typeof EFFECTS)[number]) {
+    const request = runningEffects.has(effect.name)
+      ? api.stopEffects(targetIps)
+      : api.startEffect(effect.name, targetIps, effect.fade ? { minutes: fadeMinutes } : undefined);
+    request.catch((e) => showToast(errorText(e)));
+  }
+  function stopEffects() {
+    api.stopEffects(targetIps).catch((e) => showToast(errorText(e)));
+  }
+
   function refresh() {
     spinning = true;
     setTimeout(() => (spinning = false), 700);
@@ -206,6 +229,7 @@
     let text =
       selected.length === 1 && primary ? (primary.on ? `On · ${primary.brightness}%` : "Off") : `${on} of ${selected.length} on`;
     if (offline.length && selected.length > 1) text += ` · ${offline.length} offline`;
+    if (runningEffects.size === 1) text += ` · ${effectLabel([...runningEffects][0])}`;
     return text;
   });
 
@@ -412,6 +436,36 @@
           </div>
         </section>
 
+        <section class="card">
+          <div class="section-head">
+            <h3>Effects</h3>
+            {#if runningEffects.size}
+              <button class="link" onclick={stopEffects}><Icon name="x" size={14} />Stop</button>
+            {/if}
+          </div>
+          <div class="effects">
+            {#each EFFECTS as effect (effect.name)}
+              <button
+                aria-pressed={runningEffects.has(effect.name)}
+                {disabled}
+                title={effect.hint}
+                onclick={() => toggleEffect(effect)}>
+                <Icon name={effect.icon} size={15} /><span>{effect.label}</span>
+              </button>
+            {/each}
+          </div>
+          <div class="fade">
+            <span>Sunrise &amp; sunset</span>
+            <div class="fade-options" role="radiogroup" aria-label="Sunrise and sunset length">
+              {#each FADE_MINUTES as minutes (minutes)}
+                <button role="radio" aria-checked={fadeMinutes === minutes} onclick={() => (fadeMinutes = minutes)}>
+                  {minutes} min
+                </button>
+              {/each}
+            </div>
+          </div>
+        </section>
+
         {#if selected.length > 1}
           <section class="card">
             <h3>Lights</h3>
@@ -426,7 +480,7 @@
                       style:--light={b.mode === "color" ? hueSatCss(b) : kelvinCss(b.temperature)}></span>
                     <span class="bulb-text">
                       <span>{b.name}</span>
-                      <small>{b.room ? `${b.room} · ` : ""}{bulbLine(b)}</small>
+                      <small>{b.room ? `${b.room} · ` : ""}{bulbLine(b)}{b.effect ? ` · ${effectLabel(b.effect)}` : ""}</small>
                     </span>
                   </button>
                   <Toggle
@@ -808,6 +862,78 @@
     display: flex;
     gap: 6px;
     margin-bottom: 8px;
+  }
+
+  /* effects */
+  .effects {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+  .effects button {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    height: 36px;
+    padding: 0 8px;
+    border-radius: 9px;
+    background: var(--track);
+    border: 1px solid transparent;
+    font-size: 12.5px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    transition: background 0.15s, border-color 0.15s, transform 0.12s var(--ease);
+  }
+  .effects button :global(svg) {
+    color: var(--text-2);
+  }
+  .effects button:hover:not(:disabled) {
+    background: var(--surface-hover);
+  }
+  .effects button:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+  .effects button[aria-pressed="true"] {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+  }
+  .effects button[aria-pressed="true"] :global(svg) {
+    color: var(--accent);
+    animation: glow 2.4s ease-in-out infinite;
+  }
+  @keyframes glow {
+    50% {
+      opacity: 0.45;
+    }
+  }
+  .fade {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-3);
+  }
+  .fade-options {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border-radius: 8px;
+    background: var(--track);
+  }
+  .fade-options button {
+    height: 24px;
+    padding: 0 7px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    color: var(--text-2);
+  }
+  .fade-options button[aria-checked="true"] {
+    background: var(--surface-strong);
+    color: var(--text);
+    box-shadow: var(--shadow);
   }
 
   /* bulbs */

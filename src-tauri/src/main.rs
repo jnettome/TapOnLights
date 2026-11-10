@@ -2,6 +2,7 @@
 
 mod bulbs;
 mod core;
+mod effects;
 mod secrets;
 mod server;
 mod settings;
@@ -28,6 +29,21 @@ fn snapshot(app: AppHandle) -> Snapshot {
 #[tauri::command]
 fn command(app: AppHandle, targets: Vec<String>, patch: Patch) {
     core::command(&app, &targets, patch);
+}
+
+#[tauri::command]
+fn start_effect(
+    app: AppHandle,
+    name: effects::EffectName,
+    targets: Vec<String>,
+    options: Option<effects::EffectOptions>,
+) -> Result<(), String> {
+    core::start_effect(&app, name, &targets, options.unwrap_or_default())
+}
+
+#[tauri::command]
+fn stop_effects(app: AppHandle, targets: Vec<String>) {
+    core::stop_effects(&app, &targets);
 }
 
 #[tauri::command]
@@ -325,6 +341,7 @@ fn main() {
             app.manage(AppState {
                 settings: Mutex::new(settings.clone()),
                 bulbs: bulbs.clone(),
+                effects: effects::Effects::new(),
                 web: server::WebServer::new(),
                 last_hidden_ms: AtomicU64::new(0),
                 popup_generation: AtomicU64::new(0),
@@ -382,6 +399,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             snapshot,
             command,
+            start_effect,
+            stop_effects,
             refresh,
             apply_scene,
             save_scene,

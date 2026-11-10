@@ -1,6 +1,16 @@
 export type Mode = "white" | "color";
 export type Status = "connecting" | "online" | "offline" | "authError";
 export type Theme = "system" | "light" | "dark";
+export type EffectName = "breathe" | "candle" | "colorLoop" | "sunrise" | "sunset" | "alert";
+
+export interface EffectOptions {
+  period?: number;
+  minutes?: number;
+  brightness?: number;
+  hue?: number;
+  saturation?: number;
+  times?: number;
+}
 
 export interface HueSat {
   hue: number;
@@ -22,6 +32,7 @@ export interface Bulb {
   saturation: number;
   temperature: number;
   signal: number | null;
+  effect: EffectName | null;
 }
 
 export interface Scene {

@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager as _, Theme};
 
-use crate::bulbs::{BulbView, HueSat, Manager, Patch, TEMPERATURE_RANGE};
+use crate::bulbs::{BulbView, HueSat, Manager, Patch, Status, TEMPERATURE_RANGE};
+use crate::effects::{EffectName, EffectOptions, Effects};
 use crate::secrets;
 use crate::server::{WebServer, WebStatus};
 use crate::settings::{self, DeviceEntry, Scene, Settings};
@@ -15,6 +16,7 @@ use crate::settings::{self, DeviceEntry, Scene, Settings};
 pub struct AppState {
     pub settings: Mutex<Settings>,
     pub bulbs: Arc<Manager>,
+    pub effects: Arc<Effects>,
     pub web: WebServer,
     /// When the popup was last hidden (ms since start), to ignore the tray click that hid it.
     pub last_hidden_ms: AtomicU64,
@@ -50,7 +52,7 @@ fn builtin_scenes() -> Vec<(&'static str, Scene)> {
         ("Reading", white(3000, 88)),
         ("Relax", white(2800, 55)),
         ("Night", white(2500, 12)),
-        ("Sunset", color(20, 85, 48)),
+        ("Dusk", color(20, 85, 48)),
         ("Party", color(285, 100, 80)),
     ]
 }
@@ -127,8 +129,13 @@ pub fn snapshot(app: &AppHandle) -> Snapshot {
             !settings.username.trim().is_empty(),
         )
     };
+    let running = state.effects.running();
+    let mut bulbs = state.bulbs.views();
+    for bulb in &mut bulbs {
+        bulb.effect = running.get(&bulb.ip).copied();
+    }
     Snapshot {
-        bulbs: state.bulbs.views(),
+        bulbs,
         scenes,
         theme,
         web: state.web.status(),
@@ -177,8 +184,59 @@ fn resolve_in(bulbs: &[BulbView], targets: &[String]) -> Result<Vec<String>, Str
     Ok(ips)
 }
 
+/// IPs for a resolved target list (empty means every bulb).
+fn target_ips(app: &AppHandle, targets: &[String]) -> Vec<String> {
+    if targets.is_empty() {
+        state(app).bulbs.views().into_iter().map(|b| b.ip).collect()
+    } else {
+        targets.to_vec()
+    }
+}
+
+/// A user change: it takes over the bulbs from any running effect.
 pub fn command(app: &AppHandle, targets: &[String], patch: Patch) {
-    state(app).bulbs.command(targets, patch);
+    let state = state(app);
+    state.effects.release(&target_ips(app, targets));
+    state.bulbs.command(targets, patch);
+}
+
+/// Start an effect on the given bulbs (IPs; empty means all). Bulbs running a
+/// looping effect are first put back to how they were, so that becomes the base.
+pub fn start_effect(
+    app: &AppHandle,
+    name: EffectName,
+    targets: &[String],
+    options: EffectOptions,
+) -> Result<(), String> {
+    let state = state(app);
+    let ips = target_ips(app, targets);
+    for (ip, patch) in state.effects.stop(&ips) {
+        state.bulbs.command(&[ip], patch);
+    }
+    let views: Vec<BulbView> = state
+        .bulbs
+        .views()
+        .into_iter()
+        .filter(|b| ips.contains(&b.ip) && b.status == Status::Online)
+        .collect();
+    if views.is_empty() {
+        return Err("None of those bulbs is online".into());
+    }
+    state
+        .effects
+        .start(state.bulbs.clone(), name, views, options);
+    state.bulbs.notify();
+    Ok(())
+}
+
+/// Stop effects on the given bulbs (empty means all); looping effects put the
+/// bulbs back to how they were.
+pub fn stop_effects(app: &AppHandle, targets: &[String]) {
+    let state = state(app);
+    for (ip, patch) in state.effects.stop(&target_ips(app, targets)) {
+        state.bulbs.command(&[ip], patch);
+    }
+    state.bulbs.notify();
 }
 
 pub fn refresh(app: &AppHandle) {
@@ -458,6 +516,7 @@ mod tests {
             saturation: 100,
             temperature: 3000,
             signal: None,
+            effect: None,
         }
     }
 

@@ -25,6 +25,7 @@ use tokio::sync::{broadcast, watch};
 
 use crate::bulbs::Patch;
 use crate::core::{self, SceneInput, SettingsUpdate};
+use crate::effects::{EffectName, EffectOptions};
 use crate::secrets;
 use crate::settings::WebSettings;
 
@@ -149,6 +150,8 @@ fn router(state: ServerState) -> Router {
         .route("/api/events", get(events))
         .route("/api/command", post(command))
         .route("/api/refresh", post(refresh))
+        .route("/api/effects/start", post(start_effect))
+        .route("/api/effects/stop", post(stop_effects))
         .route("/api/scenes/apply", post(apply_scene))
         .route("/api/scenes", post(save_scene))
         .route("/api/scenes/{name}", delete(delete_scene))
@@ -302,6 +305,41 @@ async fn command(
     }
     let targets = core::resolve_targets(&s.app, &body.targets).map_err(bad_request)?;
     core::command(&s.app, &targets, body.patch);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartEffectBody {
+    name: EffectName,
+    #[serde(default)]
+    targets: Vec<String>,
+    #[serde(default)]
+    options: EffectOptions,
+}
+
+async fn start_effect(
+    State(s): State<ServerState>,
+    Json(body): Json<StartEffectBody>,
+) -> Result<StatusCode, ApiError> {
+    let targets = core::resolve_targets(&s.app, &body.targets).map_err(bad_request)?;
+    core::start_effect(&s.app, body.name, &targets, body.options).map_err(bad_request)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StopEffectsBody {
+    #[serde(default)]
+    targets: Vec<String>,
+}
+
+async fn stop_effects(
+    State(s): State<ServerState>,
+    Json(body): Json<StopEffectsBody>,
+) -> Result<StatusCode, ApiError> {
+    let targets = core::resolve_targets(&s.app, &body.targets).map_err(bad_request)?;
+    core::stop_effects(&s.app, &targets);
     Ok(StatusCode::NO_CONTENT)
 }
 

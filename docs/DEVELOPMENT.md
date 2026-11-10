@@ -12,6 +12,16 @@ Design decisions behind TapOnLights, what has been verified on real hardware, an
 - **Polling:** every 10 s while a bulb is online, 15 s while it's offline. This also picks up changes made in the Tapo app.
 - **Color mode:** the bulb reports `color_temp > 0` in white mode and `0` in color mode, and keeps its last hue and saturation either way.
 
+## Effects
+
+- **Where they run:** `src-tauri/src/effects.rs` computes effect frames in the app and sends them through `Manager::command`, the same path as user changes. The workers' latest-value merging means a slow bulb skips frames instead of lagging.
+- **Kept gentle on purpose:** breathe and candle send 3 changes/s, color loop 1/s, sunrise and sunset at most 1/s, and alert steps every 400 ms. Values are only sent when they change. The measured capacity is about 8/s per bulb.
+- **Ownership:** a bulb belongs to at most one effect (`Effects` keeps a claim per IP).
+  - `core::command`, used for every user change, scenes and the tray, releases claims first, so the effect stops and the new setting stays.
+  - Stopping explicitly applies the restore patch saved when a looping effect started.
+  - Starting a new effect stops the old one with a restore first, so the restored look becomes the base.
+- **Not on the bulb:** the L530 has built-in effects of its own (`dynamic_light_effect_*` in its device info), but the `tapo` crate can only start effects on light strips. That's why these run on the PC.
+
 ## Desktop shell
 
 - **Tray popup:** a frameless, always-on-top Tauri window with Mica (Windows 11), placed next to the tray icon using the click's position and the monitor's work area.
@@ -48,6 +58,12 @@ On two L530 bulbs (hardware 2.0, firmware 1.4.4, Third-Party Compatibility on):
 - **Sustained rate** (`tapo-probe --stress`, ±1% brightness, one request in flight per bulb, the app running at the same time):
   - **Back alone, 15 s:** 8.1 changes/s; latency p50 128 ms, p90 140, p99 205, max 231.
   - **Both bulbs at once, 20 s:** 8.1–8.2 changes/s each, so bulbs don't slow each other; p99 158–176 ms, max 224; no request over 500 ms, no timeouts.
+- **Effects on an L530:**
+  - breathe (4 s period) went 89 → 11 → 95% and Stop restored the exact earlier white;
+  - alert pulsed, then restored;
+  - a manual change released candle and kept the new setting;
+  - a 30 s sunrise went from 1% at 2550 K to 100% at 4000 K, then cleared itself;
+  - an unknown effect name returns 422 listing the valid ones.
 - **One session per bulb (likely):** each stress run hit 1–2 `SESSION_TIMEOUT` errors, recovered by signing in again. The likely cause is the running app and the probe invalidating each other's sessions, which would mean a new sign-in ends the previous one. Expect brief hiccups if another client (Home Assistant, a second copy of the app) talks to the same bulbs.
 
 ## Not yet verified
