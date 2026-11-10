@@ -1,0 +1,1 @@
+"""Tapo Desktop application package."""
