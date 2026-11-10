@@ -59,6 +59,7 @@ pub struct BulbView {
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct HueSat {
     pub hue: u16,
     pub saturation: u8,
@@ -66,7 +67,7 @@ pub struct HueSat {
 
 /// A partial change. Brightness, color or temperature imply "on".
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Patch {
     pub on: Option<bool>,
     pub brightness: Option<u8>,
@@ -75,6 +76,10 @@ pub struct Patch {
 }
 
 impl Patch {
+    pub fn is_empty(&self) -> bool {
+        self.on.is_none() && !self.has_light()
+    }
+
     fn has_light(&self) -> bool {
         self.brightness.is_some() || self.color.is_some() || self.temperature.is_some()
     }
@@ -544,5 +549,72 @@ impl Worker {
             }
             format!("{v:?}") != before
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HueSat, Patch};
+
+    #[test]
+    fn newest_values_win_and_color_replaces_temperature() {
+        let mut p = Patch {
+            brightness: Some(10),
+            temperature: Some(3000),
+            ..Default::default()
+        };
+        p.merge(Patch {
+            brightness: Some(20),
+            color: Some(HueSat {
+                hue: 120,
+                saturation: 80,
+            }),
+            ..Default::default()
+        });
+        assert_eq!(p.brightness, Some(20));
+        assert_eq!(
+            p.color,
+            Some(HueSat {
+                hue: 120,
+                saturation: 80
+            })
+        );
+        assert_eq!(p.temperature, None);
+        p.merge(Patch {
+            temperature: Some(2700),
+            ..Default::default()
+        });
+        assert_eq!((p.color, p.temperature), (None, Some(2700)));
+    }
+
+    #[test]
+    fn off_clears_pending_light_changes_and_light_after_off_turns_on() {
+        let mut p = Patch {
+            brightness: Some(40),
+            ..Default::default()
+        };
+        p.merge(Patch {
+            on: Some(false),
+            ..Default::default()
+        });
+        assert_eq!((p.on, p.brightness), (Some(false), None));
+        p.merge(Patch {
+            brightness: Some(60),
+            ..Default::default()
+        });
+        assert_eq!((p.on, p.brightness), (None, Some(60)));
+    }
+
+    #[test]
+    fn sanitize_clamps_and_rejects_unknown_fields() {
+        let p = Patch {
+            brightness: Some(0),
+            temperature: Some(9000),
+            ..Default::default()
+        }
+        .sanitized();
+        assert_eq!((p.brightness, p.temperature), (Some(1), Some(6500)));
+        assert!(serde_json::from_str::<Patch>(r#"{"power": "on"}"#).is_err());
+        assert!(serde_json::from_str::<Patch>("{}").unwrap().is_empty());
     }
 }

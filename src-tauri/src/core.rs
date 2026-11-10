@@ -138,6 +138,45 @@ pub fn snapshot(app: &AppHandle) -> Snapshot {
     }
 }
 
+/// Turn targets given as bulb IPs, bulb names or room names (case-insensitive, in
+/// that order of precedence) into bulb IPs. An empty list means every bulb.
+pub fn resolve_targets(app: &AppHandle, targets: &[String]) -> Result<Vec<String>, String> {
+    resolve_in(&state(app).bulbs.views(), targets)
+}
+
+fn resolve_in(bulbs: &[BulbView], targets: &[String]) -> Result<Vec<String>, String> {
+    let mut ips: Vec<String> = Vec::new();
+    for target in targets {
+        let t = target.trim();
+        let matched: Vec<&BulbView> = match bulbs
+            .iter()
+            .find(|b| b.ip == t || b.name.eq_ignore_ascii_case(t))
+        {
+            Some(bulb) => vec![bulb],
+            None => bulbs
+                .iter()
+                .filter(|b| !b.room.is_empty() && b.room.eq_ignore_ascii_case(t))
+                .collect(),
+        };
+        if matched.is_empty() {
+            let known: Vec<String> = bulbs
+                .iter()
+                .map(|b| format!("{} ({}, room “{}”)", b.name, b.ip, b.room))
+                .collect();
+            return Err(format!(
+                "No bulb or room matches “{t}”. Bulbs: {}",
+                known.join("; ")
+            ));
+        }
+        for bulb in matched {
+            if !ips.contains(&bulb.ip) {
+                ips.push(bulb.ip.clone());
+            }
+        }
+    }
+    Ok(ips)
+}
+
 pub fn command(app: &AppHandle, targets: &[String], patch: Patch) {
     state(app).bulbs.command(targets, patch);
 }
@@ -167,7 +206,7 @@ pub fn apply_scene(app: &AppHandle, name: &str, targets: &[String]) -> Result<()
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SceneInput {
     pub brightness: u8,
     pub color: Option<HueSat>,
@@ -395,5 +434,70 @@ pub fn apply_theme(app: &AppHandle, theme: &str) {
             "dark" => Some(Theme::Dark),
             _ => None,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_in;
+    use crate::bulbs::{BulbView, Mode, Status};
+
+    fn bulb(ip: &str, name: &str, room: &str) -> BulbView {
+        BulbView {
+            ip: ip.into(),
+            name: name.into(),
+            room: room.into(),
+            model: None,
+            firmware: None,
+            status: Status::Online,
+            error: None,
+            on: true,
+            brightness: 50,
+            mode: Mode::White,
+            hue: 0,
+            saturation: 100,
+            temperature: 3000,
+            signal: None,
+        }
+    }
+
+    fn targets(t: &[&str]) -> Vec<String> {
+        t.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn resolves_ips_names_and_rooms() {
+        let bulbs = [
+            bulb("10.0.0.1", "Desk", "Office"),
+            bulb("10.0.0.2", "Shelf", "Office"),
+            bulb("10.0.0.3", "Lamp", "Bedroom"),
+        ];
+        assert_eq!(resolve_in(&bulbs, &[]).unwrap(), Vec::<String>::new());
+        assert_eq!(
+            resolve_in(&bulbs, &targets(&["10.0.0.3"])).unwrap(),
+            ["10.0.0.3"]
+        );
+        assert_eq!(
+            resolve_in(&bulbs, &targets(&["desk"])).unwrap(),
+            ["10.0.0.1"]
+        );
+        assert_eq!(
+            resolve_in(&bulbs, &targets(&["OFFICE", "Desk"])).unwrap(),
+            ["10.0.0.1", "10.0.0.2"]
+        );
+        let err = resolve_in(&bulbs, &targets(&["Kitchen"])).unwrap_err();
+        assert!(err.contains("Kitchen") && err.contains("Desk (10.0.0.1"));
+    }
+
+    #[test]
+    fn bulb_name_wins_over_room_name() {
+        let bulbs = [
+            bulb("10.0.0.1", "Office", "Office"),
+            bulb("10.0.0.2", "Shelf", "Office"),
+        ];
+        assert_eq!(
+            resolve_in(&bulbs, &targets(&["office"])).unwrap(),
+            ["10.0.0.1"]
+        );
     }
 }

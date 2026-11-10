@@ -16,7 +16,7 @@ A fast, local tray app for TP-Link Tapo smart bulbs on Windows. Click the tray i
 - **Everything the bulbs do day to day:** power, brightness, white temperature (2500–6500 K) with presets, a color wheel with quick swatches, and scenes (six built in, plus your own).
 - **Rooms and groups.** Control all lights, a room, or one bulb; the list shows each bulb's state with its own switch.
 - **Stays in sync.** Changes made in the Tapo phone app show up within about 10 seconds.
-- **Optional web page.** Serve the same controls to a browser, on this PC only or to your phone on the home network, with an optional password.
+- **Optional web page and API.** Serve the same controls to a browser, on this PC only or to your phone on the home network, with an optional password. Script it, automate it, or let an AI assistant drive it.
 - **Feels like Windows 11.** Opens next to the tray like Quick Settings, hides when you click away, follows the system light or dark theme, and uses the translucent Mica background.
 - **Local and small.** Talks only to your bulbs on the local network: no cloud relay, no telemetry. The installer is about 3.6 MB.
 
@@ -61,22 +61,20 @@ The page is plain HTTP, so on your network the password travels unencrypted. Use
 
 ### API
 
-The web page uses a small JSON API, which you can also use from scripts, home automation or a Stream Deck. Add `-u :yourpassword` to the commands below if you set a password.
-
-| Method | Path | Body / result |
-|---|---|---|
-| `GET` | `/api/snapshot` | Bulbs, scenes and status |
-| `GET` | `/api/events` | Server-sent events; a `snapshot` event on every change |
-| `POST` | `/api/command` | `{"targets": ["<ip>", …], "patch": {…}}`; empty `targets` means all bulbs |
-| `POST` | `/api/scenes/apply` | `{"name": "Relax", "targets": []}` |
-| `POST` | `/api/refresh` | Re-read every bulb now |
-
-A patch holds any of `on` (true/false), `brightness` (1–100), `temperature` (2500–6500) or `color` (`{"hue": 0–360, "saturation": 1–100}`):
+The web page runs on a small JSON API that you can use too: from scripts, home automation, a Stream Deck or an AI assistant. Anything the app's own controls can do, the API can do. Bulbs can be targeted by IP address, name or room:
 
 ```sh
 curl -X POST http://localhost:4530/api/command -H "Content-Type: application/json" \
-     -d '{"targets": [], "patch": {"brightness": 40, "temperature": 2700}}'
+     -d '{"targets": ["Office"], "patch": {"brightness": 40, "temperature": 2700}}'
 ```
+
+Full reference, with curl, PowerShell, Python and Home Assistant examples and live updates over server-sent events: **[docs/API.md](docs/API.md)**.
+
+### Control it with an AI assistant
+
+With the web page on, an AI assistant that can make HTTP requests on your network (Claude Code, for example) can control the lights in plain language: "make the office warm and cozy", "fade the desk lamp to blue".
+
+In Settings › Web page, click **Copy prompt for an AI assistant** and paste the prompt into the assistant, followed by your request. The prompt points the assistant to `/llms.txt`, a guide the app serves that explains everything the API can do. Browser-based chat apps can't reach your home network. Details and a template: [docs/API.md › Control it with an AI assistant](docs/API.md#control-it-with-an-ai-assistant).
 
 ## How it works
 
@@ -155,6 +153,10 @@ src-tauri/src/
   settings.rs        settings file
   secrets.rs         Credential Manager and web password hashing
   main.rs            tray, popup window, startup
+src-tauri/assets/
+  llms.txt           API guide served to AI assistants at /llms.txt
+docs/API.md          web API reference
+docs/DEVELOPMENT.md  design notes and verification status
 tools/tapo-probe/    command-line compatibility and latency check
 ```
 

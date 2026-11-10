@@ -128,6 +128,22 @@
 
   const webUrls = $derived([web?.localUrl, web?.lanUrl].filter((u): u is string => !!u));
 
+  // A prompt to paste into an AI assistant that can make HTTP requests on this network.
+  const aiPrompt = $derived.by(() => {
+    const url = web?.lanUrl ?? web?.localUrl;
+    if (!url) return null;
+    return [
+      "You can control my smart lights through TapOnLights, an app on my home network.",
+      `Its API is at ${url}. First read ${url}/llms.txt: it explains everything the API can do and how to use it.`,
+      "Then do what I ask by sending HTTP requests (for example with curl).",
+      web?.hasPassword
+        ? "It uses HTTP Basic auth: any username, password: <PASSWORD>"
+        : "No password is needed.",
+      "",
+      "My request: ",
+    ].join("\n");
+  });
+
   const lanWithoutPassword = $derived(
     webEnabled && webLan && !webPassword && (removeWebPassword || !loaded?.web.hasPassword),
   );
@@ -272,6 +288,16 @@
                 {/each}
                 {#if web.lan && !web.lanUrl}<p class="hint">Network address not detected. Use this PC's IP address with the port above.</p>{/if}
               </div>
+              {#if aiPrompt}
+                <button class="button ai" onclick={() => copy(aiPrompt)}>
+                  <Icon name={copied === aiPrompt ? "check" : "copy"} size={15} />
+                  {copied === aiPrompt ? "Prompt copied" : "Copy prompt for an AI assistant"}
+                </button>
+                <p class="hint">
+                  For assistants that can make network requests from your computer or network, like Claude Code. Web chats
+                  can't reach your home network.{web.hasPassword ? " Replace <PASSWORD> with the web page password." : ""}
+                </p>
+              {/if}
             {:else if web?.error}
               <p class="error">{web.error}</p>
             {/if}
@@ -472,6 +498,10 @@
   code {
     font: 12.5px ui-monospace, "Cascadia Mono", Consolas, monospace;
     user-select: text;
+  }
+  .button.ai {
+    width: 100%;
+    margin-top: 10px;
   }
   .danger-zone {
     background: transparent;

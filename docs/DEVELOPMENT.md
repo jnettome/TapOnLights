@@ -25,6 +25,8 @@ Design decisions behind TapOnLights, what has been verified on real hardware, an
 - **Password:** HTTP Basic, checked against an Argon2 hash. A successful header is cached as a SHA-256 digest, so the slow Argon2 check runs once per client, and failed attempts wait 500 ms.
 - **DNS rebinding:** requests whose `Host` is neither an IP address nor `localhost` get a 403. Commands require `Content-Type: application/json`, which cross-site pages can't send without a CORS preflight, and the server doesn't answer preflights.
 - **Desktop-only settings:** from the web, settings updates may change bulbs, scenes and the theme only. Account, startup and web-access fields are ignored.
+- **Strict API for scripts and AI assistants:** request bodies reject unknown fields (422), an empty patch or a target that matches no bulb returns 400 (the message lists the known bulbs), and unknown `/api/*` paths return 404 instead of the web page. Targets can be IPs, bulb names or rooms (`core::resolve_targets`).
+- **AI guide:** `/llms.txt` serves `src-tauri/assets/llms.txt` with `{{BASE_URL}}` replaced by `http://<Host header>`. The Host header is already checked, so it's always an IP address or localhost. Keep that file in sync with the API; `docs/API.md` is the human-facing version.
 
 ## Settings and credentials
 

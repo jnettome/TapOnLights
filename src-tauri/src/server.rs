@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{Path, Request, State};
-use axum::http::{HeaderValue, StatusCode, Uri, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -27,6 +27,8 @@ use crate::bulbs::Patch;
 use crate::core::{self, SceneInput, SettingsUpdate};
 use crate::secrets;
 use crate::settings::WebSettings;
+
+const AGENT_GUIDE: &str = include_str!("../assets/llms.txt");
 
 const CSP: &str = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; \
                    connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
@@ -151,6 +153,7 @@ fn router(state: ServerState) -> Router {
         .route("/api/scenes", post(save_scene))
         .route("/api/scenes/{name}", delete(delete_scene))
         .route("/api/settings", get(get_settings).put(put_settings))
+        .route("/llms.txt", get(llms_txt))
         .fallback(get(static_file))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
@@ -281,15 +284,25 @@ async fn events(
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CommandBody {
     #[serde(default)]
     targets: Vec<String>,
     patch: Patch,
 }
 
-async fn command(State(s): State<ServerState>, Json(body): Json<CommandBody>) -> StatusCode {
-    core::command(&s.app, &body.targets, body.patch);
-    StatusCode::NO_CONTENT
+async fn command(
+    State(s): State<ServerState>,
+    Json(body): Json<CommandBody>,
+) -> Result<StatusCode, ApiError> {
+    if body.patch.is_empty() {
+        return Err(bad_request(
+            "The patch needs at least one of: on, brightness, color, temperature".into(),
+        ));
+    }
+    let targets = core::resolve_targets(&s.app, &body.targets).map_err(bad_request)?;
+    core::command(&s.app, &targets, body.patch);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn refresh(State(s): State<ServerState>) -> StatusCode {
@@ -298,6 +311,7 @@ async fn refresh(State(s): State<ServerState>) -> StatusCode {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ApplySceneBody {
     name: String,
     #[serde(default)]
@@ -308,11 +322,13 @@ async fn apply_scene(
     State(s): State<ServerState>,
     Json(body): Json<ApplySceneBody>,
 ) -> Result<StatusCode, ApiError> {
-    core::apply_scene(&s.app, &body.name, &body.targets).map_err(bad_request)?;
+    let targets = core::resolve_targets(&s.app, &body.targets).map_err(bad_request)?;
+    core::apply_scene(&s.app, &body.name, &targets).map_err(bad_request)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SaveSceneBody {
     name: String,
     scene: SceneInput,
@@ -348,7 +364,24 @@ async fn put_settings(
         .map_err(bad_request)
 }
 
+/// Guide for AI assistants and scripts, with this server's address filled in.
+async fn llms_txt(headers: HeaderMap) -> Response {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("localhost");
+    let body = AGENT_GUIDE.replace("{{BASE_URL}}", &format!("http://{host}"));
+    ([(header::CONTENT_TYPE, "text/plain; charset=utf-8")], body).into_response()
+}
+
 async fn static_file(State(s): State<ServerState>, uri: Uri) -> Response {
+    if uri.path() == "/api" || uri.path().starts_with("/api/") {
+        return (
+            StatusCode::NOT_FOUND,
+            "Unknown API endpoint. GET /llms.txt describes the API.",
+        )
+            .into_response();
+    }
     let resolver = s.app.asset_resolver();
     let asset = resolver
         .get(uri.path().to_string())

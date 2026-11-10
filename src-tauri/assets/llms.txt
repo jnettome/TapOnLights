@@ -1,0 +1,109 @@
+# TapOnLights API: guide for AI assistants and scripts
+
+TapOnLights is a Windows app that controls TP-Link Tapo smart bulbs on a home network. This server is its web API. Everything the app's own controls can do, you can do here.
+
+Base URL: {{BASE_URL}}
+
+- **Auth:** if a request returns 401, use HTTP Basic auth with any username and the password the user gave you.
+- **Bodies:** send JSON with the header `Content-Type: application/json`.
+- **URL:** use the address above (an IP address or localhost). Requests to other hostnames are refused (403).
+
+## How to work
+
+1. `GET {{BASE_URL}}/api/snapshot` to see the bulbs (name, room, IP, status, current state) and the scenes.
+2. Work out which bulbs the user means. Targets can be bulb IPs, bulb names or room names (case-insensitive). An empty list means every bulb. If the request is ambiguous, ask.
+3. Send changes with `POST /api/command`. Change only what was asked.
+4. Reply with a short summary of what changed. To confirm what the bulbs report, wait about 1 s, `POST /api/refresh`, wait about 1 s, then `GET /api/snapshot`.
+
+## Endpoints
+
+| Method | Path | Body | Success |
+|---|---|---|---|
+| GET | /api/snapshot | — | 200, JSON state (below) |
+| POST | /api/command | `{"targets": [...], "patch": {...}}` | 204 |
+| POST | /api/scenes/apply | `{"name": "Relax", "targets": [...]}` | 204 |
+| POST | /api/scenes | `{"name": "Movie", "scene": {"brightness": 20, "color": null, "temperature": 2700}}` | 204 (saves a custom scene) |
+| DELETE | /api/scenes/{name} | — | 204 (deletes a custom scene) |
+| POST | /api/refresh | — | 204 (re-read every bulb now) |
+| GET | /api/events | — | server-sent events; a `snapshot` event with the full state on every change |
+| GET | /api/settings | — | 200: bulbs list (IP, name, room) and theme |
+| PUT | /api/settings | `{"devices": [...], "theme": "system"}` | 200; **replaces the whole bulb list**, so only use it when asked |
+
+## Patch (the "patch" in /api/command)
+
+All fields are optional, but at least one is required:
+
+| Field | Values | Effect |
+|---|---|---|
+| `on` | `true` / `false` | Power. `false` ignores the other fields. |
+| `brightness` | 1–100 | Percent. Turns the bulb on. |
+| `temperature` | 2500–6500 | White light in kelvin. Turns the bulb on and switches to white mode. |
+| `color` | `{"hue": 0–360, "saturation": 1–100}` | Colored light. Turns the bulb on and switches to color mode. |
+
+- Out-of-range numbers are clamped. Unknown fields are rejected (422).
+- Don't send `color` and `temperature` together; if you do, `color` wins.
+- Brightness can be combined with either.
+
+### Picking values
+
+- **Colors (hue):** red 0, orange 25, amber 40, yellow 55, lime 90, green 120, teal 170, cyan 185, blue 220, indigo 250, purple 275, magenta 300, pink 330. Use saturation 100 for vivid colors, 40–70 for pastels.
+- **White tones (kelvin):** candlelight 2500, warm 2700, soft 3000, neutral 4000, cool 5000, daylight 6500.
+- **Brightness:** night light 5–15, relaxed 30–50, normal 70–90, full 100.
+
+## Snapshot fields
+
+- **`bulbs[]`:**
+  - `ip`, `name`, `room`, `model`, `firmware`
+  - `status`: `online`, `connecting`, `offline` or `authError`; `error` explains anything other than online
+  - `on`, `brightness`
+  - `mode`: `white` or `color`
+  - `temperature`, `hue`, `saturation` (the last values set, whichever mode is active)
+  - `signal`: Wi-Fi signal level, 0–3
+- **`scenes[]`:** `name`, `builtin`, `brightness`, `temperature` (or null), `color` (or null).
+- **Also:** `temperatureRange`, and `web` (the server's status).
+
+Bulbs that aren't `online` won't respond until they reconnect, and the app retries every 15 s. Tell the user and include the `error` text.
+
+## Timing
+
+- **A change** is accepted at once (204), shows in the snapshot right away, and reaches the bulb in about 0.1–0.2 s.
+- **Fades and sequences:** for gradual changes, send steps at least 150 ms apart. Faster requests are merged, and only the latest value is sent.
+
+## Examples
+
+```sh
+# Everything off
+curl -X POST {{BASE_URL}}/api/command -H "Content-Type: application/json" -d '{"targets": [], "patch": {"on": false}}'
+
+# Warm, dim light in the Office room
+curl -X POST {{BASE_URL}}/api/command -H "Content-Type: application/json" -d '{"targets": ["Office"], "patch": {"brightness": 30, "temperature": 2700}}'
+
+# One bulb blue
+curl -X POST {{BASE_URL}}/api/command -H "Content-Type: application/json" -d '{"targets": ["Back"], "patch": {"color": {"hue": 220, "saturation": 100}}}'
+
+# A scene everywhere
+curl -X POST {{BASE_URL}}/api/scenes/apply -H "Content-Type: application/json" -d '{"name": "Relax", "targets": []}'
+
+# With a password (any username)
+curl -u "me:PASSWORD" {{BASE_URL}}/api/snapshot
+```
+
+In Windows PowerShell, `curl` is an alias for Invoke-WebRequest, so call `curl.exe`, or use:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri {{BASE_URL}}/api/command -ContentType "application/json" -Body '{"targets": [], "patch": {"brightness": 60}}'
+```
+
+## Errors
+
+- **400:** a plain-text message, for example an unknown bulb or room (the message lists the known bulbs), an unknown scene, or an empty patch.
+- **401:** password required or wrong.
+- **403:** use an IP address or localhost in the URL.
+- **404:** unknown endpoint.
+- **415:** missing `Content-Type: application/json`.
+- **422:** the JSON has the wrong shape or an unknown field; the message says which.
+
+## Rules
+
+- Don't change settings (`PUT /api/settings`) or delete scenes unless the user asks for exactly that.
+- The account password, startup options and web-access settings can't be changed through this API.
