@@ -1,0 +1,13 @@
+[package]
+name = "tapo-probe"
+version = "0.1.0"
+description = "Check that TapOnLights can reach your Tapo bulbs, and time it"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+publish = false
+
+[dependencies]
+tapo = "0.12.2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+rpassword = "7"

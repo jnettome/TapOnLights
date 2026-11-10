@@ -1,20 +1,13 @@
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.venv*/
-venv/
-.tmp/
-build/
+# Dependencies and build output
+node_modules/
 dist/
-*.spec
+src-tauri/target/
+src-tauri/gen/
+tools/*/target/
+
+# Local environment
 .env
 .env.*
-!*.env.example
-local-settings.json
-credentials.json
-build-*/
-dist-*/
-*.egg-info/
-node_modules/
-target/
-desktop/src-tauri/gen/
+*.log
+.DS_Store
+Thumbs.db
