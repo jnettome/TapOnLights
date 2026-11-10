@@ -12,6 +12,8 @@ export interface Api {
   refresh(): Promise<void>;
   startEffect(name: EffectName, targets: string[], options?: EffectOptions): Promise<void>;
   stopEffects(targets: string[]): Promise<void>;
+  /** Accept the one-time "effects are experimental" warning. */
+  acknowledgeEffects(): Promise<void>;
   applyScene(name: string, targets: string[]): Promise<void>;
   saveScene(name: string, scene: SceneInput): Promise<void>;
   deleteScene(name: string): Promise<void>;
@@ -43,6 +45,7 @@ function tauriApi(): Api {
     refresh: () => invoke("refresh"),
     startEffect: (name, targets, options) => invoke("start_effect", { name, targets, options: options ?? null }),
     stopEffects: (targets) => invoke("stop_effects", { targets }),
+    acknowledgeEffects: () => invoke("acknowledge_effects"),
     applyScene: (name, targets) => invoke("apply_scene", { name, targets }),
     saveScene: (name, scene) => invoke("save_scene", { name, scene }),
     deleteScene: (name) => invoke("delete_scene", { name }),
@@ -94,6 +97,7 @@ function httpApi(): Api {
     refresh: () => http("POST", "/api/refresh"),
     startEffect: (name, targets, options) => http("POST", "/api/effects/start", { name, targets, options: options ?? {} }),
     stopEffects: (targets) => http("POST", "/api/effects/stop", { targets }),
+    acknowledgeEffects: () => http("POST", "/api/effects/acknowledge"),
     applyScene: (name, targets) => http("POST", "/api/scenes/apply", { name, targets }),
     saveScene: (name, scene) => http("POST", "/api/scenes", { name, scene }),
     deleteScene: (name) => http("DELETE", `/api/scenes/${encodeURIComponent(name)}`),

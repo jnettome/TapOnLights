@@ -15,11 +15,18 @@ Design decisions behind TapOnLights, what has been verified on real hardware, an
 ## Effects
 
 - **Where they run:** `src-tauri/src/effects.rs` computes effect frames in the app and sends them through `Manager::command`, the same path as user changes. The workers' latest-value merging means a slow bulb skips frames instead of lagging.
-- **Kept gentle on purpose:** breathe and candle send 3 changes/s, color loop 1/s, sunrise and sunset at most 1/s, and alert steps every 400 ms. Values are only sent when they change. The measured capacity is about 8/s per bulb.
+- **Smooth motion:** the Tapo local API has no transition time (the set request only carries power, brightness, hue/saturation and color temperature), so each change is a jump.
+  - The first version sent 3 changes/s, and steps of about 13% were plainly visible.
+  - Effects now send small steps: breathe up to 6/s, candle and color loop 4/s, sunrise and sunset at most 2/s, alert every 400 ms.
+  - Values are only sent when they change, against a measured capacity of about 8/s.
+  - Brightness is animated in perceived lightness (brightness^(1/2.2)), so steps look even, and kelvin moves in 10 K steps.
+  - Measured on an L530 with the default 10 s breathe: about 2.5% per step (largest 4%), down from about 13% in the first version. Slow speed (16 s) roughly halves that again.
+  - The remaining limit is 1% brightness resolution, which can show at the dim end.
 - **Ownership:** a bulb belongs to at most one effect (`Effects` keeps a claim per IP).
   - `core::command`, used for every user change, scenes and the tray, releases claims first, so the effect stops and the new setting stays.
   - Stopping explicitly applies the restore patch saved when a looping effect started.
   - Starting a new effect stops the old one with a restore first, so the restored look becomes the base.
+- **Experimental, confirmed once:** `settings.effects_acknowledged` gates `core::start_effect`. The UI shows a warning dialog on the first start, and the API returns 409 with the warning text until `POST /api/effects/acknowledge` is called. `/llms.txt` tells assistants to relay the warning and ask before acknowledging. The unknowns are long-run wear (whether the bulb writes its state to storage on every change) and stability over hours; only short runs were tested.
 - **Not on the bulb:** the L530 has built-in effects of its own (`dynamic_light_effect_*` in its device info), but the `tapo` crate can only start effects on light strips. That's why these run on the PC.
 
 ## Desktop shell

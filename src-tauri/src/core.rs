@@ -107,11 +107,13 @@ pub struct Snapshot {
     pub has_account: bool,
     pub temperature_range: (u16, u16),
     pub backdrop: bool,
+    /// Effects are experimental; until this is true they can't be started.
+    pub effects_acknowledged: bool,
 }
 
 pub fn snapshot(app: &AppHandle) -> Snapshot {
     let state = state(app);
-    let (scenes, theme, has_account) = {
+    let (scenes, theme, has_account, effects_acknowledged) = {
         let settings = state.settings.lock().unwrap();
         let mut scenes: Vec<SceneView> = builtin_scenes()
             .iter()
@@ -127,6 +129,7 @@ pub fn snapshot(app: &AppHandle) -> Snapshot {
             scenes,
             settings.theme.clone(),
             !settings.username.trim().is_empty(),
+            settings.effects_acknowledged,
         )
     };
     let running = state.effects.running();
@@ -142,6 +145,7 @@ pub fn snapshot(app: &AppHandle) -> Snapshot {
         has_account,
         temperature_range: TEMPERATURE_RANGE,
         backdrop: state.backdrop,
+        effects_acknowledged,
     }
 }
 
@@ -200,6 +204,20 @@ pub fn command(app: &AppHandle, targets: &[String], patch: Patch) {
     state.bulbs.command(targets, patch);
 }
 
+pub const EFFECTS_NOT_ACKNOWLEDGED: &str = "Effects are experimental and haven't been confirmed on this PC yet. \
+Tell the user: Tapo bulbs can't fade on their own, so effects send a stream of small changes (up to 6 per \
+second per bulb); long-term wear from hours of use is unknown; alert flashes the lights. If they agree, \
+POST /api/effects/acknowledge once, then start the effect again.";
+
+pub fn effects_acknowledged(app: &AppHandle) -> bool {
+    state(app).settings.lock().unwrap().effects_acknowledged
+}
+
+/// Record that the user accepted the experimental-effects warning (asked once per PC).
+pub fn acknowledge_effects(app: &AppHandle) -> Result<(), String> {
+    update_settings(app, |s| s.effects_acknowledged = true)
+}
+
 /// Start an effect on the given bulbs (IPs; empty means all). Bulbs running a
 /// looping effect are first put back to how they were, so that becomes the base.
 pub fn start_effect(
@@ -208,6 +226,9 @@ pub fn start_effect(
     targets: &[String],
     options: EffectOptions,
 ) -> Result<(), String> {
+    if !effects_acknowledged(app) {
+        return Err(EFFECTS_NOT_ACKNOWLEDGED.into());
+    }
     let state = state(app);
     let ips = target_ips(app, targets);
     for (ip, patch) in state.effects.stop(&ips) {

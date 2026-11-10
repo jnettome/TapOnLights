@@ -42,6 +42,11 @@ fn start_effect(
 }
 
 #[tauri::command]
+fn acknowledge_effects(app: AppHandle) -> Result<(), String> {
+    core::acknowledge_effects(&app)
+}
+
+#[tauri::command]
 fn stop_effects(app: AppHandle, targets: Vec<String>) {
     core::stop_effects(&app, &targets);
 }
@@ -401,6 +406,7 @@ fn main() {
             command,
             start_effect,
             stop_effects,
+            acknowledge_effects,
             refresh,
             apply_scene,
             save_scene,

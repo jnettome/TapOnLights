@@ -14,7 +14,8 @@ A fast, local tray app for TP-Link Tapo smart bulbs on Windows. Click the tray i
 
 - **Instant control.** Each bulb keeps one open connection, the UI updates the moment you move a control, and while you drag only the latest value is sent. A change reaches the bulb in about 100–135 ms.
 - **Everything the bulbs do day to day:** power, brightness, white temperature (2500–6500 K) with presets, a color wheel with quick swatches, and scenes (six built in, plus your own).
-- **Effects:** breathe, candle flicker, color loop, sunrise and sunset fades (5–60 minutes, or up to 120 from the API), and an alert pulse that puts the lights back afterwards. They run in the app, use at most 3 changes per second per bulb, and stop as soon as you change a light.
+- **Effects (experimental):** breathe, candle flicker, color loop, sunrise and sunset fades (5–60 minutes, or up to 120 from the API), and an alert pulse that puts the lights back afterwards. Pick a color for breathe, candle, color loop and alert, and a speed for breathe and color loop. Effects run in the app in small, frequent steps for smooth motion (the bulbs have no transitions of their own), and stop as soon as you change a light. See [Effects](#effects-experimental) before relying on them.
+- **Alerts for scripts and AI assistants.** Flash the lights green when a build passes or red when it fails, or blue when the doorbell rings; the lights go back to exactly how they were.
 - **Rooms and groups.** Control all lights, a room, or one bulb; the list shows each bulb's state with its own switch.
 - **Stays in sync.** Changes made in the Tapo phone app show up within about 10 seconds.
 - **Optional web page and API.** Serve the same controls to a browser, on this PC only or to your phone on the home network, with an optional password. Script it, automate it, or let an AI assistant drive it.
@@ -75,7 +76,22 @@ Full reference, with curl, PowerShell, Python and Home Assistant examples and li
 
 With the web page on, an AI assistant that can make HTTP requests on your network (Claude Code, for example) can control the lights in plain language: "make the office warm and cozy", "fade the desk lamp to blue".
 
-In Settings › Web page, click **Copy prompt for an AI assistant** and paste the prompt into the assistant, followed by your request. The prompt points the assistant to `/llms.txt`, a guide the app serves that explains everything the API can do. Browser-based chat apps can't reach your home network. Details and a template: [docs/API.md › Control it with an AI assistant](docs/API.md#control-it-with-an-ai-assistant).
+In Settings › Web page, click **Copy prompt for an AI assistant** and paste the prompt into the assistant, followed by your request. The prompt points the assistant to `/llms.txt`, a guide the app serves that explains everything the API can do. Browser-based chat apps can't reach your home network.
+
+Alerts work especially well with coding assistants: "when you finish, run the tests and flash my lights green if they pass, red if they fail." More prompts are in [docs/API.md › Alerts and notifications](docs/API.md#alerts-and-notifications). Details and a template: [docs/API.md › Control it with an AI assistant](docs/API.md#control-it-with-an-ai-assistant).
+
+## Effects (experimental)
+
+Tapo bulbs like the L530 can't fade between values on their own, so effects work by sending a stream of small changes: up to 6 per second per bulb for breathe, 4 for the others. That's below the roughly 8 per second the bulbs handled in testing.
+
+- **Tested:** short runs on an L530.
+- **Not tested:** hours of continuous use. Whether that wears the bulb isn't known.
+- **Flashing:** the alert effect flashes the lights. Avoid it around anyone sensitive to flashing light.
+
+For these reasons, the app asks for confirmation the first time an effect is started on a PC (from the popup, the web page or the API).
+
+- **Smoothest motion:** pick **Slow** speed. Even then, near 1–5% brightness, single steps can still show, because 1% is the smallest step the bulbs accept.
+- **Alerts** are the most practical use: scripts, Home Assistant and AI assistants can flash a color and leave the lights as they were. Commands and ready-made prompts are in [docs/API.md › Alerts and notifications](docs/API.md#alerts-and-notifications).
 
 ## How it works
 

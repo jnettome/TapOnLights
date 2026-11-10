@@ -1,9 +1,11 @@
 //! Light effects computed on the PC and sent through the bulb workers.
 //!
-//! Effects are deliberately gentle on the bulbs: at most 3 changes per second
-//! per bulb (measured capacity is ~8/s), and a value is only sent when it
-//! changes. Because workers merge queued changes, a slow bulb skips frames
-//! instead of falling behind.
+//! Tapo bulbs have no transition time in their local API: every command jumps
+//! to the new value. Smoothness therefore comes from small, frequent steps:
+//! up to 6 changes per second for breathe and 4 for the others (an L530
+//! accepts ~8/s), only sent when a value actually changes, and brightness is
+//! animated in perceived lightness so steps look even. Because workers merge
+//! queued changes, a slow bulb skips frames instead of falling behind.
 //!
 //! A bulb belongs to at most one effect. Any user change to a bulb releases it
 //! (the effect stops there); stopping a looping effect explicitly puts the
@@ -20,10 +22,22 @@ use tokio::time::{Instant, MissedTickBehavior, interval, sleep};
 
 use crate::bulbs::{BulbView, HueSat, Manager, Mode, Patch};
 
-const BREATHE_HZ: f64 = 3.0;
-const CANDLE_HZ: f64 = 3.0;
-const COLOR_LOOP_HZ: f64 = 1.0;
-const FADE_HZ: f64 = 1.0;
+const BREATHE_HZ: f64 = 6.0;
+const CANDLE_HZ: f64 = 4.0;
+const COLOR_LOOP_HZ: f64 = 4.0;
+const FADE_HZ: f64 = 2.0;
+/// Default flame color for candle.
+const FLAME: HueSat = HueSat {
+    hue: 28,
+    saturation: 95,
+};
+/// Default alert color (red).
+const ALERT_RED: HueSat = HueSat {
+    hue: 0,
+    saturation: 100,
+};
+/// How far colorLoop drifts either side of a chosen color, in degrees.
+const DRIFT_WIDTH: f64 = 45.0;
 const ALERT_STEP: Duration = Duration::from_millis(400);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,16 +66,16 @@ impl EffectName {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EffectOptions {
-    /// Seconds per cycle: breathe (3–60, default 8), colorLoop (10–600, default 60).
+    /// Seconds per cycle: breathe (3–60, default 10), colorLoop (10–600, default 60).
     pub period: Option<f64>,
     /// Fade length for sunrise and sunset in minutes (0.5–120, default 15).
     pub minutes: Option<f64>,
     /// Peak brightness for breathe, base for candle, final for sunrise (1–100).
     pub brightness: Option<u8>,
-    /// Alert color hue (default 0, red).
-    pub hue: Option<u16>,
-    /// Alert and colorLoop saturation (default 100).
-    pub saturation: Option<u8>,
+    /// Color for breathe (default: the light's current look), candle (default
+    /// flame orange), colorLoop (drift around it instead of the whole wheel)
+    /// and alert (default red).
+    pub color: Option<HueSat>,
     /// Alert pulses (1–10, default 3).
     pub times: Option<u8>,
 }
@@ -185,36 +199,58 @@ impl Effects {
 
 // ---- frame math (pure, unit-tested) ------------------------------------------
 
+/// Perceived lightness is roughly brightness^(1/2.2). Animating in that space
+/// makes steps look even instead of jumping at the dim end.
+const GAMMA: f64 = 2.2;
+
+fn to_perceived(brightness: f64) -> f64 {
+    (brightness / 100.0).clamp(0.0, 1.0).powf(1.0 / GAMMA)
+}
+
+fn from_perceived(lightness: f64) -> u8 {
+    (100.0 * lightness.clamp(0.0, 1.0).powf(GAMMA))
+        .round()
+        .clamp(1.0, 100.0) as u8
+}
+
+fn round_kelvin(k: f64) -> u16 {
+    ((k / 10.0).round() * 10.0) as u16
+}
+
 /// Brightness for breathing: starts at `max`, dips to `min` half a period later.
 fn breathe_level(t: f64, period: f64, min: f64, max: f64) -> u8 {
     let x = 0.5 + 0.5 * (TAU * t / period).cos();
-    (min + (max - min) * x).round().clamp(1.0, 100.0) as u8
+    let (lo, hi) = (to_perceived(min), to_perceived(max));
+    from_perceived(lo + (hi - lo) * x)
 }
 
 /// Sunrise at progress `p` (0–1): brightness 1 → `end`, 2500 K → 4000 K.
 fn sunrise_at(p: f64, end: u8) -> (u8, u16) {
     let p = p.clamp(0.0, 1.0);
-    let b = 1.0 + (f64::from(end) - 1.0) * p.powf(1.6);
-    let k = 2500.0 + 1500.0 * p;
     (
-        b.round().clamp(1.0, 100.0) as u8,
-        ((k / 50.0).round() * 50.0) as u16,
+        from_perceived(to_perceived(f64::from(end)) * p),
+        round_kelvin(2500.0 + 1500.0 * p),
     )
 }
 
 /// Sunset at progress `p` (0–1): from (`start_b`, `start_k`) down to 1% at 2500 K.
 fn sunset_at(p: f64, start_b: u8, start_k: u16) -> (u8, u16) {
     let p = p.clamp(0.0, 1.0);
-    let b = 1.0 + (f64::from(start_b) - 1.0) * (1.0 - p).powf(1.3);
-    let k = f64::from(start_k) + (2500.0 - f64::from(start_k)) * p;
+    let k = f64::from(start_k);
     (
-        b.round().clamp(1.0, 100.0) as u8,
-        ((k / 50.0).round() * 50.0) as u16,
+        from_perceived(to_perceived(f64::from(start_b)) * (1.0 - p)),
+        round_kelvin(k + (2500.0 - k) * p),
     )
 }
 
+/// Hue going around the whole wheel once per `period`.
 fn color_loop_hue(t: f64, period: f64, start: f64) -> u16 {
     ((start + 360.0 * t / period).rem_euclid(360.0)).round() as u16 % 360
+}
+
+/// Hue swinging ±`width` degrees around `center` once per `period`.
+fn color_drift_hue(t: f64, period: f64, center: f64, width: f64) -> u16 {
+    ((center + width * (TAU * t / period).sin()).rem_euclid(360.0)).round() as u16 % 360
 }
 
 /// Small xorshift generator; candle flicker doesn't need more.
@@ -294,22 +330,27 @@ async fn run(
     let mut last: Vec<Option<(u8, u16)>> = vec![None; start.len()];
     match name {
         EffectName::Breathe => {
-            let period = o.period.unwrap_or(8.0).clamp(3.0, 60.0);
+            let period = o.period.unwrap_or(10.0).clamp(3.0, 60.0);
             animate(effects, bulbs, id, start, BREATHE_HZ, None, |t, i, v| {
                 let max = f64::from(o.brightness.unwrap_or(v.brightness.max(30)).clamp(1, 100));
-                let b = breathe_level(t, period, (max * 0.12).max(3.0), max);
-                (last[i] != Some((b, 0))).then(|| {
-                    last[i] = Some((b, 0));
-                    Patch {
-                        brightness: Some(b),
-                        ..Default::default()
-                    }
+                let b = breathe_level(t, period, (max * 0.3).max(3.0), max);
+                if last[i] == Some((b, 0)) {
+                    return None;
+                }
+                // The chosen color goes out with the first step; later steps merge onto it.
+                let color = if last[i].is_none() { o.color } else { None };
+                last[i] = Some((b, 0));
+                Some(Patch {
+                    brightness: Some(b),
+                    color,
+                    ..Default::default()
                 })
             })
             .await;
         }
         EffectName::Candle => {
             let base = f64::from(o.brightness.unwrap_or(60).clamp(5, 100));
+            let flame = o.color.unwrap_or(FLAME);
             let mut flames: Vec<(Rng, f64, f64)> = (0..start.len())
                 .map(|i| (Rng::seeded(i as u64 + 1), 1.0, 1.0))
                 .collect();
@@ -317,14 +358,19 @@ async fn run(
                 let (rng, level, target) = &mut flames[i];
                 let roll = rng.next();
                 if roll < 0.05 {
-                    *target = 0.35 + 0.15 * rng.next(); // a gust
-                } else if roll < 0.4 {
+                    *target = 0.4 + 0.15 * rng.next(); // a gust
+                } else if roll < 0.45 {
                     *target = 0.6 + 0.4 * rng.next();
                 }
-                *level += (*target - *level) * 0.6;
+                *level += (*target - *level) * 0.4;
                 let b = (base * *level).round().clamp(1.0, 100.0) as u8;
-                let hue = 24 + (rng.next() * 8.0) as u16;
-                let saturation = 92 + (rng.next() * 8.0) as u8;
+                let hue = (f64::from(flame.hue) + rng.next() * 6.0 - 3.0).rem_euclid(360.0) as u16;
+                let saturation =
+                    (f64::from(flame.saturation) - rng.next() * 6.0).clamp(1.0, 100.0) as u8;
+                if last[i] == Some((b, hue)) {
+                    return None;
+                }
+                last[i] = Some((b, hue));
                 Some(Patch {
                     brightness: Some(b),
                     color: Some(HueSat { hue, saturation }),
@@ -335,21 +381,35 @@ async fn run(
         }
         EffectName::ColorLoop => {
             let period = o.period.unwrap_or(60.0).clamp(10.0, 600.0);
-            let saturation = o.saturation.unwrap_or(100).clamp(1, 100);
             animate(effects, bulbs, id, start, COLOR_LOOP_HZ, None, |t, i, v| {
-                // Start from the bulb's color and spread bulbs apart a little.
-                let base = if v.mode == Mode::Color {
-                    f64::from(v.hue)
-                } else {
-                    0.0
-                };
-                let hue = color_loop_hue(t, period, base + 90.0 * i as f64 / n as f64);
-                (last[i] != Some((saturation, hue))).then(|| {
-                    last[i] = Some((saturation, hue));
-                    Patch {
-                        color: Some(HueSat { hue, saturation }),
-                        ..Default::default()
+                // Spread bulbs apart a little so they don't all show the same color.
+                let spread = i as f64 / n as f64;
+                let (hue, saturation) = match o.color {
+                    Some(c) => (
+                        color_drift_hue(
+                            t + period * spread / 4.0,
+                            period,
+                            f64::from(c.hue),
+                            DRIFT_WIDTH,
+                        ),
+                        c.saturation,
+                    ),
+                    None => {
+                        let base = if v.mode == Mode::Color {
+                            f64::from(v.hue)
+                        } else {
+                            0.0
+                        };
+                        (color_loop_hue(t, period, base + 90.0 * spread), 100)
                     }
+                };
+                if last[i] == Some((saturation, hue)) {
+                    return None;
+                }
+                last[i] = Some((saturation, hue));
+                Some(Patch {
+                    color: Some(HueSat { hue, saturation }),
+                    ..Default::default()
                 })
             })
             .await;
@@ -417,10 +477,7 @@ async fn run(
             }
         }
         EffectName::Alert => {
-            let color = HueSat {
-                hue: o.hue.unwrap_or(0).min(360),
-                saturation: o.saturation.unwrap_or(100).clamp(1, 100),
-            };
+            let color = o.color.unwrap_or(ALERT_RED);
             let bright = Patch {
                 on: Some(true),
                 brightness: Some(100),
@@ -487,7 +544,25 @@ mod tests {
         assert_eq!(sunrise_at(1.0, 80), (80, 4000));
         assert_eq!(sunset_at(0.0, 60, 3000), (60, 3000));
         assert_eq!(sunset_at(1.0, 60, 3000), (1, 2500));
-        assert_eq!(sunrise_at(0.37, 100).1 % 50, 0);
+        assert_eq!(sunrise_at(0.37, 100).1 % 10, 0);
+        // Brightness steps look even: half way is far below 50% raw brightness.
+        assert!(sunrise_at(0.5, 100).0 < 30);
+    }
+
+    #[test]
+    fn breathe_is_even_in_perceived_lightness() {
+        // A quarter period in, perceived lightness is half way, so raw brightness
+        // sits below the arithmetic midpoint.
+        let quarter = breathe_level(2.5, 10.0, 20.0, 80.0);
+        assert!(quarter > 20 && quarter < 50, "{quarter}");
+    }
+
+    #[test]
+    fn drift_stays_within_its_width() {
+        for step in 0..120 {
+            let hue = color_drift_hue(f64::from(step) * 0.5, 60.0, 10.0, 45.0);
+            assert!(hue <= 55 || hue >= 325, "{hue}");
+        }
     }
 
     #[test]

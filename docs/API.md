@@ -7,7 +7,8 @@ When the web page is on, TapOnLights serves a small JSON API next to it. The web
 - [Endpoints](#endpoints)
 - [Choosing bulbs: targets](#choosing-bulbs-targets)
 - [Changing lights: the patch](#changing-lights-the-patch)
-- [Effects](#effects)
+- [Effects (experimental)](#effects-experimental)
+- [Alerts and notifications](#alerts-and-notifications)
 - [The snapshot](#the-snapshot)
 - [Live updates](#live-updates)
 - [Errors](#errors)
@@ -41,7 +42,8 @@ The server only answers requests addressed to an IP address or `localhost`; any 
 | `POST` | `/api/scenes/apply` | `{"name": "Relax", "targets": [...]}` | `204` |
 | `POST` | `/api/scenes` | `{"name": "Movie", "scene": {"brightness": 20, "color": null, "temperature": 2700}}` | `204`; saves or replaces a custom scene |
 | `DELETE` | `/api/scenes/{name}` | — | `204`; deletes a custom scene (built-in scenes can't be deleted) |
-| `POST` | `/api/effects/start` | `{"name": "candle", "targets": [...], "options": {...}}` | `204`; see [Effects](#effects) |
+| `POST` | `/api/effects/start` | `{"name": "candle", "targets": [...], "options": {...}}` | `204`; see [Effects](#effects-experimental). `409` until effects have been confirmed once. |
+| `POST` | `/api/effects/acknowledge` | — | `204`; records that the user accepted the experimental-effects warning |
 | `POST` | `/api/effects/stop` | `{"targets": [...]}` | `204`; looping effects put the lights back to how they were |
 | `POST` | `/api/refresh` | — | `204`; re-reads every bulb now instead of waiting for the next 10 s poll |
 | `GET` | `/api/settings` | — | `200`: bulbs (`ip`, `name`, `room`), theme and other preferences |
@@ -83,25 +85,38 @@ Useful values:
 - **Hue:** red 0, orange 25, amber 40, yellow 55, lime 90, green 120, teal 170, cyan 185, blue 220, indigo 250, purple 275, magenta 300, pink 330.
 - **Saturation:** 100 for vivid colors, 40–70 for pastels.
 
-## Effects
+## Effects (experimental)
+
+> **Experimental.** Tapo bulbs like the L530 can't fade on their own, so effects work by sending a stream of small changes, up to 6 per second per bulb, over your Wi-Fi.
+>
+> - **Tested:** short runs on an L530; the bulbs handled about 8 changes per second without errors.
+> - **Not tested:** hours of continuous use. Whether that wears the bulb (for example, if it saves its state on every change) isn't known.
+> - **Flashing:** `alert` flashes the lights. Avoid it around anyone sensitive to flashing light.
+
+**Confirming once.** The first time anyone starts an effect, the app shows this warning and asks for confirmation. The answer is saved in the settings, so it's asked once per PC. Until then, `POST /api/effects/start` returns `409` with an explanation. Scripts and AI assistants should show the user the warning, and then, if the user agrees, call `POST /api/effects/acknowledge` once. The snapshot's `effectsAcknowledged` field tells you whether that has happened.
 
 Effects run inside the app. It computes each step and sends it to the bulbs, so nothing needs to stay connected to the API.
 
 | `name` | What it does | `options` (all optional) |
 |---|---|---|
-| `breathe` | Brightness rises and falls slowly, in the current color | `period` seconds per breath (3–60, default 8), `brightness` peak |
-| `candle` | Warm, flickering flame | `brightness` base level (default 60) |
-| `colorLoop` | Drifts around the color wheel; multiple bulbs are spread a little apart | `period` seconds per loop (10–600, default 60), `saturation` (default 100) |
+| `breathe` | Brightness rises and falls slowly | `color` (default: the light's current look), `period` seconds per breath (3–60, default 10), `brightness` peak |
+| `candle` | Soft, flickering flame | `color` (default flame orange), `brightness` base level (default 60) |
+| `colorLoop` | Drifts around the whole color wheel, or ±45° around `color` if given; multiple bulbs are spread a little apart | `color`, `period` seconds per loop (10–600, default 60) |
 | `sunrise` | Fades up from 1% at 2500 K to full brightness at 4000 K, then stays there | `minutes` (0.5–120, default 15), `brightness` final level (default 100) |
 | `sunset` | Fades down to 1% at 2500 K, then turns the lights off | `minutes` (0.5–120, default 15) |
-| `alert` | Pulses a color a few times, then puts the lights back to how they were | `hue` (default 0, red), `saturation`, `times` (1–10, default 3) |
+| `alert` | Pulses a color a few times, then puts the lights back to how they were | `color` (default red), `times` (1–10, default 3) |
+
+`color` is `{"hue": 0–360, "saturation": 1–100}`, the same as in a patch.
 
 ```sh
 curl -X POST http://localhost:4530/api/effects/start -H "Content-Type: application/json" \
      -d '{"name": "sunrise", "targets": ["Bedroom"], "options": {"minutes": 20}}'
 
 curl -X POST http://localhost:4530/api/effects/start -H "Content-Type: application/json" \
-     -d '{"name": "alert", "options": {"hue": 120, "times": 2}}'      # green double pulse, all bulbs
+     -d '{"name": "alert", "options": {"color": {"hue": 120, "saturation": 100}, "times": 2}}'  # green double pulse, all bulbs
+
+curl -X POST http://localhost:4530/api/effects/start -H "Content-Type: application/json" \
+     -d '{"name": "breathe", "targets": ["Desk"], "options": {"color": {"hue": 220, "saturation": 90}}}'  # breathe in blue
 ```
 
 How effects behave:
@@ -111,7 +126,92 @@ How effects behave:
 - **Stopping** with `/api/effects/stop`, or the Stop button, puts bulbs running `breathe`, `candle` or `colorLoop` back to how they were before. `sunrise` and `sunset` stay where they are.
 - **Only online bulbs take part.** If none of the targets is online, the request returns `400`.
 - **What's running** is each bulb's `effect` field in the snapshot (`null` when none).
-- **Gentle on the bulbs:** at most 3 changes per second per bulb (about a third of what an L530 accepts), and nothing is sent when a value doesn't change. `sunrise` and `sunset` send at most one change per second.
+- **Speed:** in the app, the Speed choice (Slow, Normal, Fast) sets `period` for `breathe` (16, 10 or 6 s) and `colorLoop` (120, 60 or 30 s). Slower means smaller steps, so smoother motion.
+- **Smoothness:** Tapo bulbs have no transition time in their local API, so every change is a jump. Effects use small, frequent steps instead: up to 6 changes per second per bulb for `breathe` and 4 for the others (an L530 accepts about 8), and nothing is sent when a value doesn't change. Brightness moves in steps that look even to the eye. At the dim end, single 1% steps can still be visible, because 1% is the smallest step the bulbs accept.
+
+## Alerts and notifications
+
+`alert` is the most useful effect for scripts: it gets your attention, then puts every light back exactly as it was, including turning it off again if it was off.
+
+**One-time setup:** turn on the web page, and confirm effects once, either by starting any effect in the app or with `POST /api/effects/acknowledge`.
+
+### Suggested colors
+
+| Meaning | Color | `color` option |
+|---|---|---|
+| Success, done | green | `{"hue": 120, "saturation": 100}` |
+| Failure, error | red | `{"hue": 0, "saturation": 100}` (the default) |
+| Warning, attention | amber | `{"hue": 40, "saturation": 100}` |
+| Information, someone's here | blue | `{"hue": 220, "saturation": 100}` |
+
+Two or three pulses (`times`) are enough; an alert takes about 0.8 s per pulse.
+
+### From a terminal
+
+```sh
+# bash: flash green if the last command succeeded, red if it failed
+flash() {
+  local hue=0; [ "${1:-$?}" -eq 0 ] && hue=120
+  curl -s -X POST http://localhost:4530/api/effects/start -H "Content-Type: application/json" \
+       -d "{\"name\": \"alert\", \"options\": {\"color\": {\"hue\": $hue, \"saturation\": 100}, \"times\": 2}}"
+}
+npm test; flash $?
+```
+
+```powershell
+# PowerShell: add to your $PROFILE
+function Flash-Lights([int]$Hue = 0, [int]$Times = 2, [string[]]$Targets = @()) {
+  $body = @{ name = "alert"; targets = $Targets; options = @{ color = @{ hue = $Hue; saturation = 100 }; times = $Times } }
+  Invoke-RestMethod -Method Post -Uri http://localhost:4530/api/effects/start `
+    -ContentType "application/json" -Body ($body | ConvertTo-Json -Depth 4) | Out-Null
+}
+dotnet build; if ($?) { Flash-Lights -Hue 120 } else { Flash-Lights }   # green or red
+```
+
+### From Home Assistant (for example, a doorbell)
+
+```yaml
+rest_command:
+  lights_alert_blue:
+    url: "http://192.168.1.20:4530/api/effects/start"
+    method: post
+    content_type: "application/json"
+    payload: '{"name": "alert", "targets": ["Office"], "options": {"color": {"hue": 220, "saturation": 100}, "times": 3}}'
+
+automation:
+  - alias: "Doorbell flashes the office lights"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.doorbell
+        to: "on"
+    action:
+      - service: rest_command.lights_alert_blue
+```
+
+### Prompts for an AI assistant
+
+An assistant that runs commands on your computer, such as Claude Code, can use alerts to tell you when it's done. Paste the prompt from Settings › Web page › **Copy prompt for an AI assistant** first (or the [template](#control-it-with-an-ai-assistant)), then ask, for example:
+
+```text
+When you finish this task, run the tests and flash my office lights: green twice if
+everything passes, red three times if anything fails.
+```
+
+```text
+Watch the deploy (gh run watch) and when it ends, flash all lights blue if it succeeded
+or red if it failed.
+```
+
+```text
+Create a Windows scheduled task that flashes the office lights amber at 18:00 on weekdays,
+using the TapOnLights API, so I remember to stop working.
+```
+
+```text
+Every 25 minutes until I tell you to stop, flash the desk lamp green once (Pomodoro breaks).
+```
+
+If effects haven't been confirmed yet, the assistant gets a `409` that explains the warning. The guide at `/llms.txt` tells it to show you the warning and ask before it confirms.
 
 ## The snapshot
 
@@ -145,14 +245,16 @@ How effects behave:
            "localUrl": "http://localhost:4530", "lanUrl": null, "error": null },
   "hasAccount": true,
   "temperatureRange": [2500, 6500],
-  "backdrop": true
+  "backdrop": true,
+  "effectsAcknowledged": false
 }
 ```
 
 - **`status`:** `online`, `connecting`, `offline` (unreachable) or `authError` (sign-in rejected). `error` explains any status other than `online`. Bulbs that aren't online don't respond until the app reconnects, which it retries every 15 s.
 - **`mode`:** whether the bulb shows white (`temperature` applies) or color (`hue` and `saturation` apply). The inactive values are the last ones used.
 - **`signal`:** Wi-Fi signal level reported by the bulb.
-- **`effect`:** the [effect](#effects) running on the bulb (`breathe`, `candle`, `colorLoop`, `sunrise`, `sunset` or `alert`), or `null`.
+- **`effect`:** the [effect](#effects-experimental) running on the bulb (`breathe`, `candle`, `colorLoop`, `sunrise`, `sunset` or `alert`), or `null`.
+- **`effectsAcknowledged`:** whether the one-time [experimental-effects](#effects-experimental) warning has been accepted on this PC.
 - **`backdrop`:** whether the desktop popup uses the Windows 11 background; scripts can ignore it.
 
 ## Live updates
@@ -176,6 +278,7 @@ data: {"bulbs":[...],"scenes":[...],...}
 | `401` | A password is set and was missing or wrong |
 | `403` | The URL's host isn't an IP address or `localhost` |
 | `404` | Unknown `/api/...` path |
+| `409` | Starting an effect before effects have been confirmed once (see [Effects](#effects-experimental)) |
 | `415` | Missing `Content-Type: application/json` |
 | `422` | JSON with the wrong shape or an unknown field; the message names it |
 

@@ -7,8 +7,7 @@ export interface EffectOptions {
   period?: number;
   minutes?: number;
   brightness?: number;
-  hue?: number;
-  saturation?: number;
+  color?: HueSat;
   times?: number;
 }
 
@@ -61,6 +60,7 @@ export interface Snapshot {
   hasAccount: boolean;
   temperatureRange: [number, number];
   backdrop: boolean;
+  effectsAcknowledged: boolean;
 }
 
 export interface Patch {

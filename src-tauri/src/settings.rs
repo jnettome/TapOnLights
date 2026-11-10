@@ -62,6 +62,8 @@ pub struct Settings {
     pub launch_on_startup: bool,
     pub custom_scenes: BTreeMap<String, Scene>,
     pub web: WebSettings,
+    /// The user confirmed the one-time warning that effects are experimental.
+    pub effects_acknowledged: bool,
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -76,6 +78,7 @@ impl Default for Settings {
             launch_on_startup: false,
             custom_scenes: BTreeMap::new(),
             web: WebSettings::default(),
+            effects_acknowledged: false,
             extra: serde_json::Map::new(),
         }
     }

@@ -26,6 +26,7 @@ Base URL: {{BASE_URL}}
 | DELETE | /api/scenes/{name} | — | 204 (deletes a custom scene) |
 | POST | /api/effects/start | `{"name": "candle", "targets": [...], "options": {...}}` | 204 (see Effects) |
 | POST | /api/effects/stop | `{"targets": [...]}` | 204 (looping effects restore the earlier look) |
+| POST | /api/effects/acknowledge | — | 204 (records the user's one-time OK for experimental effects; see Effects) |
 | POST | /api/refresh | — | 204 (re-read every bulb now) |
 | GET | /api/events | — | server-sent events; a `snapshot` event with the full state on every change |
 | GET | /api/settings | — | 200: bulbs list (IP, name, room) and theme |
@@ -52,23 +53,54 @@ All fields are optional, but at least one is required:
 - **White tones (kelvin):** candlelight 2500, warm 2700, soft 3000, neutral 4000, cool 5000, daylight 6500.
 - **Brightness:** night light 5–15, relaxed 30–50, normal 70–90, full 100.
 
-## Effects
+## Effects (experimental)
 
-Animations that run inside the app; you don't need to keep sending requests. Names and options (all optional):
+**Ask the user once before the first effect.** If the snapshot's `effectsAcknowledged` is false, starting any effect (including `alert`) returns 409. Before you call `POST /api/effects/acknowledge`, tell the user:
+
+- effects are experimental: Tapo bulbs can't fade on their own, so effects send a stream of small changes (up to 6 per second per bulb) over Wi-Fi;
+- long-term wear from hours of continuous use is unknown;
+- `alert` flashes the lights, which can be a problem for people sensitive to flashing light.
+
+Then ask whether to go ahead. Call `POST /api/effects/acknowledge` only if they agree. It's saved, so it's needed only once per PC. Never acknowledge on the user's behalf without asking.
+
+Effects are animations that run inside the app; you don't need to keep sending requests. Names and options (all optional):
 
 | Name | Effect | Options |
 |---|---|---|
-| `breathe` | brightness rises and falls slowly | `period` 3–60 s (default 8), `brightness` peak |
-| `candle` | warm flicker | `brightness` base (default 60) |
-| `colorLoop` | slow drift around the color wheel | `period` 10–600 s (default 60), `saturation` |
+| `breathe` | brightness rises and falls slowly | `color` (default: current look), `period` 3–60 s (default 10), `brightness` peak |
+| `candle` | soft flicker | `color` (default flame orange), `brightness` base (default 60) |
+| `colorLoop` | drift around the whole wheel, or ±45° around `color` | `color`, `period` 10–600 s (default 60) |
 | `sunrise` | 1% / 2500 K up to full brightness at 4000 K | `minutes` 0.5–120 (default 15), `brightness` final |
 | `sunset` | down to 1% / 2500 K, then off | `minutes` 0.5–120 (default 15) |
-| `alert` | colored pulses, then back to the earlier look | `hue` (default 0, red), `saturation`, `times` 1–10 (default 3) |
+| `alert` | colored pulses, then back to the earlier look | `color` (default red), `times` 1–10 (default 3) |
+
+`color` is `{"hue": 0–360, "saturation": 1–100}`. Example: `{"name": "breathe", "targets": ["Office"], "options": {"color": {"hue": 275, "saturation": 80}}}`.
 
 - Any manual change to a bulb (`/api/command`, a scene) stops its effect.
 - `/api/effects/stop` restores the earlier look for `breathe`, `candle` and `colorLoop`.
 - Each bulb's `effect` field in the snapshot shows what's running.
 - Prefer these over fast loops of `/api/command`: they're smoother and gentler on the bulbs.
+
+## Alerts and notifications
+
+`alert` is the right tool for telling the user something: it pulses, then restores every light exactly, including turning it back off if it was off. It takes about 0.8 s per pulse.
+
+Suggested colors:
+
+- **success, done:** green `{"hue": 120, "saturation": 100}`
+- **failure, error:** red `{"hue": 0, "saturation": 100}` (the default)
+- **warning, attention:** amber `{"hue": 40, "saturation": 100}`
+- **information:** blue `{"hue": 220, "saturation": 100}`
+
+Use `times` 2 or 3.
+
+```sh
+# Tests passed: two green pulses on every bulb
+curl -X POST {{BASE_URL}}/api/effects/start -H "Content-Type: application/json" -d '{"name": "alert", "options": {"color": {"hue": 120, "saturation": 100}, "times": 2}}'
+```
+
+- **Scheduled or recurring alerts** (every day at 18:00) need something that keeps running, such as Windows Task Scheduler or cron. Offer to create that, rather than promising to remember.
+- **When the user asks to be notified about a task you're running** (a build, tests, a deploy), send the alert as soon as the result is known: green for success, red for failure.
 
 ## Snapshot fields
 
@@ -80,6 +112,7 @@ Animations that run inside the app; you don't need to keep sending requests. Nam
   - `temperature`, `hue`, `saturation` (the last values set, whichever mode is active)
   - `signal`: Wi-Fi signal level, 0–3
   - `effect`: the running effect, or null
+- **`effectsAcknowledged`:** whether the user has OK'd experimental effects on this PC.
 - **`scenes[]`:** `name`, `builtin`, `brightness`, `temperature` (or null), `color` (or null).
 - **Also:** `temperatureRange`, and `web` (the server's status).
 
@@ -124,6 +157,7 @@ Invoke-RestMethod -Method Post -Uri {{BASE_URL}}/api/command -ContentType "appli
 - **401:** password required or wrong.
 - **403:** use an IP address or localhost in the URL.
 - **404:** unknown endpoint.
+- **409:** an effect was started before the user OK'd experimental effects; see Effects.
 - **415:** missing `Content-Type: application/json`.
 - **422:** the JSON has the wrong shape or an unknown field; the message says which.
 

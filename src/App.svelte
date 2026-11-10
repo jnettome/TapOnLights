@@ -25,18 +25,38 @@
     { name: "Daylight", kelvin: 6500 },
   ];
 
-  const EFFECTS: { name: EffectName; label: string; icon: IconName; fade?: boolean; hint: string }[] = [
-    { name: "breathe", label: "Breathe", icon: "wind", hint: "Brightness rises and falls slowly" },
-    { name: "candle", label: "Candle", icon: "flame", hint: "A warm, flickering flame" },
-    { name: "colorLoop", label: "Color loop", icon: "rainbow", hint: "Drifts slowly around the color wheel" },
+  type Speed = "slow" | "normal" | "fast";
+  type EffectDef = {
+    name: EffectName;
+    label: string;
+    icon: IconName;
+    fade?: boolean;
+    color?: boolean;
+    /** Seconds per cycle for each speed. */
+    periods?: Record<Speed, number>;
+    hint: string;
+  };
+  const EFFECTS: EffectDef[] = [
+    { name: "breathe", label: "Breathe", icon: "wind", color: true, periods: { slow: 16, normal: 10, fast: 6 }, hint: "Brightness rises and falls slowly" },
+    { name: "candle", label: "Candle", icon: "flame", color: true, hint: "A soft, flickering flame" },
+    { name: "colorLoop", label: "Color loop", icon: "rainbow", color: true, periods: { slow: 120, normal: 60, fast: 30 }, hint: "Drifts slowly around the color wheel, or around the chosen color" },
     { name: "sunrise", label: "Sunrise", icon: "sunrise", fade: true, hint: "Fades up from a dim warm glow to bright white" },
     { name: "sunset", label: "Sunset", icon: "sunset", fade: true, hint: "Fades down to a warm glow, then turns off" },
-    { name: "alert", label: "Alert", icon: "bell", hint: "Three red pulses, then back to how it was" },
+    { name: "alert", label: "Alert", icon: "bell", color: true, hint: "Three pulses, then back to how it was" },
   ];
   const FADE_MINUTES = [5, 15, 30, 60];
 
   let snap = $state<Snapshot | null>(null);
   let fadeMinutes = $state(15);
+  /** Color for Breathe, Candle, Color loop and Alert; null uses each effect's default. */
+  let effectColor = $state<HueSat | null>(null);
+  /** Breathe and Color loop speed; slower is smoother. */
+  let effectSpeed = $state<Speed>("normal");
+  const SPEEDS: [Speed, string][] = [
+    ["slow", "Slow"],
+    ["normal", "Normal"],
+    ["fast", "Fast"],
+  ];
   let view = $state<"main" | "settings">("main");
   let target = $state("all");
   let themePreview = $state<Theme | null>(null);
@@ -196,12 +216,53 @@
     api.deleteScene(s.name).catch((e) => showToast(errorText(e)));
   }
 
-  function toggleEffect(effect: (typeof EFFECTS)[number]) {
-    const request = runningEffects.has(effect.name)
-      ? api.stopEffects(targetIps)
-      : api.startEffect(effect.name, targetIps, effect.fade ? { minutes: fadeMinutes } : undefined);
-    request.catch((e) => showToast(errorText(e)));
+  function effectOptions(effect: EffectDef) {
+    return {
+      ...(effect.fade ? { minutes: fadeMinutes } : {}),
+      ...(effect.color && effectColor ? { color: effectColor } : {}),
+      ...(effect.periods ? { period: effect.periods[effectSpeed] } : {}),
+    };
   }
+  /** Restart the running effect with new options if `uses` says the change affects it. */
+  function updateRunning(uses: (e: EffectDef) => boolean) {
+    const running = runningEffects.size === 1 ? EFFECTS.find((e) => runningEffects.has(e.name)) : undefined;
+    if (running && running.name !== "alert" && uses(running)) {
+      api.startEffect(running.name, targetIps, effectOptions(running)).catch((e) => showToast(errorText(e)));
+    }
+  }
+  /** Effect waiting for the one-time experimental-effects confirmation. */
+  let confirmingEffect = $state<EffectDef | null>(null);
+
+  function toggleEffect(effect: EffectDef) {
+    if (runningEffects.has(effect.name)) {
+      api.stopEffects(targetIps).catch((e) => showToast(errorText(e)));
+    } else if (!snap?.effectsAcknowledged) {
+      confirmingEffect = effect;
+    } else {
+      api.startEffect(effect.name, targetIps, effectOptions(effect)).catch((e) => showToast(errorText(e)));
+    }
+  }
+  async function confirmEffects() {
+    const effect = confirmingEffect;
+    confirmingEffect = null;
+    if (!effect) return;
+    try {
+      await api.acknowledgeEffects();
+      await api.startEffect(effect.name, targetIps, effectOptions(effect));
+    } catch (e) {
+      showToast(errorText(e));
+    }
+  }
+  function pickEffectColor(c: HueSat | null) {
+    effectColor = c;
+    updateRunning((e) => !!e.color);
+  }
+  function pickEffectSpeed(speed: Speed) {
+    effectSpeed = speed;
+    updateRunning((e) => !!e.periods);
+  }
+  const sameColor = (a: HueSat | null, b: HueSat | null) =>
+    a === b || (!!a && !!b && a.hue === b.hue && a.saturation === b.saturation);
   function stopEffects() {
     api.stopEffects(targetIps).catch((e) => showToast(errorText(e)));
   }
@@ -245,7 +306,8 @@
     media.addEventListener("change", onMedia);
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (view === "settings") view = "main";
+      if (confirmingEffect) confirmingEffect = null;
+      else if (view === "settings") view = "main";
       else api.hide();
     };
     window.addEventListener("keydown", onKey);
@@ -455,6 +517,36 @@
             {/each}
           </div>
           <div class="fade">
+            <span>Color</span>
+            <div class="effect-colors" role="radiogroup" aria-label="Effect color">
+              <button
+                class="auto"
+                role="radio"
+                aria-checked={effectColor === null}
+                title="Each effect's own color: Breathe keeps the light's color, Candle is flame orange, Color loop uses the whole wheel, Alert is red"
+                onclick={() => pickEffectColor(null)}>Auto</button>
+              {#each SWATCHES as c (c.hue)}
+                <button
+                  class="dot-swatch"
+                  role="radio"
+                  aria-checked={sameColor(effectColor, c)}
+                  aria-label="Hue {c.hue}"
+                  style:background={hueSatCss(c)}
+                  onclick={() => pickEffectColor(c)}></button>
+              {/each}
+            </div>
+          </div>
+          <div class="fade">
+            <span>Speed</span>
+            <div class="fade-options" role="radiogroup" aria-label="Breathe and color loop speed">
+              {#each SPEEDS as [speed, label] (speed)}
+                <button role="radio" aria-checked={effectSpeed === speed} title="Breathe and Color loop; slower is smoother" onclick={() => pickEffectSpeed(speed)}>
+                  {label}
+                </button>
+              {/each}
+            </div>
+          </div>
+          <div class="fade">
             <span>Sunrise &amp; sunset</span>
             <div class="fade-options" role="radiogroup" aria-label="Sunrise and sunset length">
               {#each FADE_MINUTES as minutes (minutes)}
@@ -503,6 +595,27 @@
         </button>
       </footer>
     {/if}
+  {/if}
+
+  {#if confirmingEffect}
+    <div class="overlay">
+      <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="fx-title" aria-describedby="fx-body">
+        <div class="dialog-icon"><Icon name="alert" size={22} /></div>
+        <h2 id="fx-title">Effects are experimental</h2>
+        <ul id="fx-body">
+          <li>Tapo bulbs like the L530 can't fade on their own, so effects send a stream of small changes, up to 6 per second per bulb, over your Wi-Fi.</li>
+          <li>They haven't been tested for hours at a time. Whether heavy use wears the bulb isn't known.</li>
+          <li>Alert flashes the lights. Avoid it around anyone sensitive to flashing light.</li>
+          <li>Touch any control to stop an effect.</li>
+        </ul>
+        <p class="dialog-note">You'll only be asked once on this PC.</p>
+        <div class="dialog-actions">
+          <button class="button ghost" onclick={() => (confirmingEffect = null)}>Cancel</button>
+          <!-- svelte-ignore a11y_autofocus -->
+          <button class="button primary" autofocus onclick={confirmEffects}>Start {confirmingEffect.label}</button>
+        </div>
+      </div>
+    </div>
   {/if}
 
   {#if toast}
@@ -916,6 +1029,39 @@
     font-size: 12px;
     color: var(--text-3);
   }
+  .effect-colors {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .effect-colors .auto {
+    height: 22px;
+    padding: 0 7px;
+    border-radius: 11px;
+    background: var(--track);
+    font-size: 11.5px;
+    color: var(--text-2);
+    border: 1px solid transparent;
+  }
+  .effect-colors .auto[aria-checked="true"] {
+    border-color: var(--accent);
+    color: var(--text);
+  }
+  .dot-swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
+    transition: transform 0.15s var(--ease);
+  }
+  .dot-swatch:hover {
+    transform: scale(1.12);
+  }
+  .dot-swatch[aria-checked="true"] {
+    box-shadow:
+      0 0 0 2px var(--surface-strong),
+      0 0 0 4px var(--accent);
+  }
   .fade-options {
     display: flex;
     gap: 2px;
@@ -1067,6 +1213,75 @@
   @keyframes spin {
     to {
       transform: rotate(360deg);
+    }
+  }
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 10;
+    animation: fade-in 0.15s ease-out;
+  }
+  .dialog {
+    width: 100%;
+    max-width: 340px;
+    padding: 18px;
+    border-radius: var(--radius-lg);
+    background: var(--surface-strong);
+    border: 1px solid var(--stroke-strong);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+    animation: rise-in 0.2s var(--ease);
+  }
+  .dialog-icon {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: color-mix(in oklab, var(--warning) 18%, transparent);
+    color: var(--warning);
+  }
+  .dialog h2 {
+    margin: 10px 0 8px;
+    font: 600 17px/1.25 var(--font-display);
+  }
+  .dialog ul {
+    margin: 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-2);
+    user-select: text;
+  }
+  .dialog-note {
+    margin: 10px 0 0;
+    font-size: 12px;
+    color: var(--text-3);
+  }
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .button.ghost {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--stroke-strong);
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes rise-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px) scale(0.98);
     }
   }
   .toast {

@@ -152,6 +152,7 @@ fn router(state: ServerState) -> Router {
         .route("/api/refresh", post(refresh))
         .route("/api/effects/start", post(start_effect))
         .route("/api/effects/stop", post(stop_effects))
+        .route("/api/effects/acknowledge", post(acknowledge_effects))
         .route("/api/scenes/apply", post(apply_scene))
         .route("/api/scenes", post(save_scene))
         .route("/api/scenes/{name}", delete(delete_scene))
@@ -322,8 +323,16 @@ async fn start_effect(
     State(s): State<ServerState>,
     Json(body): Json<StartEffectBody>,
 ) -> Result<StatusCode, ApiError> {
+    if !core::effects_acknowledged(&s.app) {
+        return Err((StatusCode::CONFLICT, core::EFFECTS_NOT_ACKNOWLEDGED.into()));
+    }
     let targets = core::resolve_targets(&s.app, &body.targets).map_err(bad_request)?;
     core::start_effect(&s.app, body.name, &targets, body.options).map_err(bad_request)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn acknowledge_effects(State(s): State<ServerState>) -> Result<StatusCode, ApiError> {
+    core::acknowledge_effects(&s.app).map_err(bad_request)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
