@@ -1,0 +1,11 @@
+[package]
+name = "tapo-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+tapo = "0.12.2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+keyring = { version = "3.6", features = ["windows-native"] }
+serde_json = "1"

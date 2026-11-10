@@ -46,3 +46,14 @@ This document records findings from the first real-device probe and the initial 
 - `python -m scripts.control --ip <address> state|on|off|brightness|color|temperature` — CLI controller.
 - `python -m app.main` — Qt tray application.
 - `build.ps1` — one-folder Windows executable build.
+
+## Tauri rewrite (`desktop/`)
+
+- **Library choice:** `spikes/tapo-probe` ran the Rust `tapo` crate 0.12.2 against both L530s (hw 2.0, fw 1.4.4, Third-Party Compatibility on), with the account read from the Python app's settings and Credential Manager entry. Login ~80–110 ms; `get_device_info` ~22 ms on an open session; `set_brightness` ~100–135 ms. The crate also implements TPAP, the protocol the bulbs used before Third-Party Compatibility was enabled; that path has not been tried.
+- **Why the Python app felt slow:** every change did UDP discovery, a new login, a full state read, the command, another full read, a disconnect, and then a full refresh of every bulb, one bulb after another, with one job allowed at a time across the app. The Rust core keeps one session per bulb, applies changes to the UI before the bulb answers, merges queued changes ("latest wins"), and polls state every 10 s to pick up changes made in the Tapo phone app. A state read that started before a command is discarded so the UI doesn't snap back.
+- **Session handling:** the `tapo` handler doesn't renew sessions by itself. On an HTTP or `Unauthorized` error on an existing session, the worker logs in again once and retries.
+- **Credential compatibility:** python-keyring's WinVaultKeyring stores the password under target `Tapo Desktop` (or `<user>@Tapo Desktop`) as UTF-16. `keyring` 3.x with `Entry::new_with_target` reads and writes the same entry.
+- **Settings compatibility:** the Tauri app keeps unknown keys in `settings.json` and adds `web` and a `"system"` theme value. The Python app does not know `"system"`.
+- **Popup auto-hide:** Tauri reported `Focused(true)` then `Focused(false)` about 2 ms after `show()`, and again after hiding (likely WebView2 moving focus internally), so focus events can't be used to detect click-away. The app polls the foreground window's process every 120 ms while the popup is open and hides once another app is in front, but only if the popup was in front first. If Windows refuses focus (an app started from a background process), the popup stays open until dismissed.
+- **Verified end to end (first release build; the API path is unchanged since):** both bulbs online with correct state from the existing settings; the web server served the page with a CSP and refused a foreign Host header (403); a burst of 10 brightness commands was accepted in 6 ms, a device read-back showed the new value, and the original brightness was restored. The settings file was restored byte-for-byte after the test.
+- **Not yet verified:** the light theme, the color wheel and swatches on a real bulb, LAN access from a phone, launch at sign-in, and the installer.

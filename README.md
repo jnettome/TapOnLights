@@ -1,6 +1,33 @@
 # Tapo Desktop
 
-A lightweight Windows tray controller for TP-Link Tapo smart bulbs, built around local LAN communication with `python-kasa`.
+A lightweight Windows tray controller for TP-Link Tapo smart bulbs that talks to the bulbs directly on the local network.
+
+## Tauri app (current): `desktop/`
+
+Rust core ([`tapo`](https://crates.io/crates/tapo) crate) with a Svelte + TypeScript UI in a Tauri 2 tray popup. The same UI can also be served as a web page from this PC.
+
+- **Instant changes:** each bulb keeps one open session. Commands update the UI at once and go out in a single request; values queued during a slider drag are merged so only the latest is sent. Measured on the L530s: login ~80–110 ms, state read ~22 ms, brightness change ~100–135 ms.
+- **Same settings and login as the Python app:** reads `%APPDATA%\Tapo Desktop\settings.json` and the password the Python app stored in Windows Credential Manager.
+- **Optional web page** (Settings › Web page): off by default, this PC only unless "Allow other devices on my network" is on, optional HTTP password (stored as an Argon2 hash). Account, startup and web-access settings can only be changed in the desktop app. Requests whose Host isn't an IP address or `localhost` are refused (DNS-rebinding protection).
+- **Size:** 3.6 MB installer / 13.5 MB exe, using the WebView2 built into Windows 11 (the PyInstaller bundle was 181 MB).
+
+Build (Windows, needs Rust, Node and the MSVC build tools):
+
+```powershell
+cd desktop
+npm install
+npx tauri build          # exe: src-tauri\target\release\tapo-desktop.exe
+                         # installer: src-tauri\target\release\bundle\nsis\
+npx tauri dev            # run with hot reload
+npm run check            # Svelte/TypeScript checks
+cd src-tauri; cargo test
+```
+
+The tray icon's left click toggles the popup; right click has all on/off, the web page, settings and quit. `spikes/tapo-probe` is the latency/compatibility probe used to choose the `tapo` crate.
+
+## Python app (original)
+
+The sections below cover the original PySide6 + `python-kasa` app, kept for reference.
 
 ## Compatibility status
 

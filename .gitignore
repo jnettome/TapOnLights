@@ -15,3 +15,6 @@ credentials.json
 build-*/
 dist-*/
 *.egg-info/
+node_modules/
+target/
+desktop/src-tauri/gen/
