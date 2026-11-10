@@ -45,6 +45,11 @@ On two L530 bulbs (hardware 2.0, firmware 1.4.4, Third-Party Compatibility on):
   - a burst of 10 brightness commands was accepted in 6 ms, and a read-back from the bulb showed the new value;
   - the popup appeared next to the tray and stayed in front.
 
+- **Sustained rate** (`tapo-probe --stress`, ±1% brightness, one request in flight per bulb, the app running at the same time):
+  - **Back alone, 15 s:** 8.1 changes/s; latency p50 128 ms, p90 140, p99 205, max 231.
+  - **Both bulbs at once, 20 s:** 8.1–8.2 changes/s each, so bulbs don't slow each other; p99 158–176 ms, max 224; no request over 500 ms, no timeouts.
+- **One session per bulb (likely):** each stress run hit 1–2 `SESSION_TIMEOUT` errors, recovered by signing in again. The likely cause is the running app and the probe invalidating each other's sessions, which would mean a new sign-in ends the previous one. Expect brief hiccups if another client (Home Assistant, a second copy of the app) talks to the same bulbs.
+
 ## Not yet verified
 
 - The color wheel and swatches on a bulb

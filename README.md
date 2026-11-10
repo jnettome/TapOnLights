@@ -169,9 +169,10 @@ cd tools\tapo-probe
 $env:TAPO_USERNAME = "you@example.com"
 cargo run --release -- 192.168.1.42 192.168.1.43            # read-only
 cargo run --release -- 192.168.1.42 --write                 # also time brightness changes
+cargo run --release -- 192.168.1.42 192.168.1.43 --stress 20  # max sustained change rate
 ```
 
-The password is asked for without echo, or read from `TAPO_PASSWORD`. `--write` changes the brightness of bulbs that are on by 1% and then restores it; bulbs that are off are left off.
+The password is asked for without echo, or read from `TAPO_PASSWORD`. `--write` changes the brightness of bulbs that are on by 1% and then restores it; bulbs that are off are left off. `--stress` sends changes to all the given bulbs at once, as fast as each accepts them, for the given number of seconds (alternating brightness by 1%, which you can't see). It reports the rate, latency percentiles and errors, which tells you how far each bulb can be pushed for effects.
 
 ## Troubleshooting
 
