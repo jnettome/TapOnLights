@@ -51,6 +51,19 @@ Design decisions behind TapOnLights, what has been verified on real hardware, an
 - The Tapo password is in Credential Manager under target `TapOnLights` (UTF-16, via `keyring` 3 with `Entry::new_with_target`).
 - **Migration from the earlier name "Tapo Desktop":** on first run, settings and the credential (including the python-keyring layouts `Tapo Desktop` and `<user>@Tapo Desktop`) are copied over. The originals are left in place.
 
+## Releasing
+
+1. Bump the version in three places: `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`. Then run `npm install` and `cargo check`, so the lock files pick up the new version.
+2. Commit, then tag the commit and push the tag:
+   ```sh
+   git tag v0.3.0
+   git push origin v0.3.0
+   ```
+3. The **Release** workflow (`.github/workflows/release.yml`) checks that the tag matches `tauri.conf.json`, builds on Windows, and creates a **draft** release with the NSIS installer and the portable `.exe`. You can also start it by hand from the Actions tab; it then uses the version in `tauri.conf.json`.
+4. Review the draft, add what changed, and publish it.
+
+Builds aren't code-signed. Signing would need a certificate stored as a repository secret; see Tauri's Windows code-signing guide.
+
 ## Verified on hardware
 
 On two L530 bulbs (hardware 2.0, firmware 1.4.4, Third-Party Compatibility on):

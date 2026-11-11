@@ -1,5 +1,9 @@
 # TapOnLights
 
+[![CI](https://github.com/jnettome/TapOnLights/actions/workflows/ci.yml/badge.svg)](https://github.com/jnettome/TapOnLights/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/jnettome/TapOnLights?include_prereleases)](https://github.com/jnettome/TapOnLights/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 A fast, local tray app for TP-Link Tapo smart bulbs on Windows. Click the tray icon, drag a slider, and the light follows, without the phone app and without the cloud.
 
 <p align="center">
@@ -39,7 +43,12 @@ Using another Tapo bulb? Run the [probe](#check-your-bulbs-with-the-probe) and o
 
 ## Install
 
-TapOnLights is built from source for now (see [Building from source](#building-from-source)). The build produces both an installer (per-user, no admin rights) and a standalone `.exe`.
+Download the latest version from [Releases](https://github.com/jnettome/TapOnLights/releases):
+
+- **`TapOnLights_<version>_x64-setup.exe`:** the installer. It installs for your user only and needs no admin rights.
+- **The plain `.exe`:** a portable copy you can run from anywhere.
+
+The app isn't code-signed yet, so Windows SmartScreen may warn the first time you run it: choose *More info* › *Run anyway*. You can also [build it yourself](#building-from-source).
 
 ## Getting started
 
@@ -199,7 +208,7 @@ The password is asked for without echo, or read from `TAPO_PASSWORD`. `--write` 
 
 ## Contributing
 
-Issues and pull requests are welcome. For device problems, include the probe output (it contains no credentials). Before opening a pull request, run `npm run check`, `cargo test` and `cargo clippy`.
+Issues and pull requests are welcome. For device problems, include the probe output (it contains no credentials). CI runs the type checks, `cargo fmt --check`, `cargo clippy` (warnings fail the build) and `cargo test` on every pull request, so run those locally first. Report security problems privately; see [SECURITY.md](SECURITY.md).
 
 ## Acknowledgements
 

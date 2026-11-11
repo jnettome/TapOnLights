@@ -160,7 +160,11 @@ async fn stress_bulb(ip: String, user: String, pass: String, duration: Duration)
     let started = Instant::now();
     let mut i = 0u64;
     while started.elapsed() < duration {
-        let value = if i.is_multiple_of(2) { nudged } else { original };
+        let value = if i.is_multiple_of(2) {
+            nudged
+        } else {
+            original
+        };
         i += 1;
         let t = Instant::now();
         match tokio::time::timeout(Duration::from_secs(2), handler.set_brightness(value)).await {

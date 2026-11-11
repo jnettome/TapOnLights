@@ -1,0 +1,67 @@
+name: Release
+
+# Push a tag like v0.2.0 (it must match the version in src-tauri/tauri.conf.json),
+# or run this workflow by hand. It builds the Windows installer and the portable
+# .exe and attaches them to a draft release for you to review and publish.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and draft release (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the tag matches the app version
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ("${{ github.ref_name }}" -ne "v$version") {
+            throw "Tag ${{ github.ref_name }} doesn't match version $version in src-tauri/tauri.conf.json"
+          }
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm packages
+        run: npm ci
+
+      - name: Build and upload
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: TapOnLights v__VERSION__
+          releaseDraft: true
+          prerelease: false
+          uploadPlainBinary: true
+          releaseBody: |
+            A fast, local Windows tray app for TP-Link Tapo smart bulbs.
+
+            **Download**
+            - `TapOnLights_<version>_x64-setup.exe`: installer (per user, no admin rights needed)
+            - the plain `.exe`: portable, run it from anywhere
+
+            **Requirements:** Windows 11 (Windows 10 should work, untested), Tapo bulbs on the same network, and your Tapo account. Tested with the Tapo L530.
+
+            The app isn't code-signed yet, so Windows SmartScreen may warn the first time you run it: choose *More info* › *Run anyway*.
+
+            Setup: [README](https://github.com/jnettome/TapOnLights#getting-started) · Web API and AI prompts: [docs/API.md](https://github.com/jnettome/TapOnLights/blob/main/docs/API.md) · Effects are experimental.
+
+            TapOnLights is not affiliated with TP-Link.
