@@ -4959,6 +4959,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-single-instance",
  "tokio",
+ "windows",
  "windows-sys 0.61.2",
  "windows-version",
 ]

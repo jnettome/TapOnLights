@@ -245,9 +245,9 @@ Actions. The first two **ring**; the others change the lights quietly:
 | `{"type": "sunrise", "minutes": 15}` | Starts a sunrise fade of that length. |
 | `{"type": "scene", "name": "Relax"}` | Applies a scene. |
 
-**Ringing** means a Windows notification on the PC, and the popup opens on the ringing timer. The timer stays in the list, with `ringingSinceMs` set, until it's dismissed (`DELETE`) or snoozed (`extend`, which restarts it that many minutes from now). `flash`, `sunset` and `sunrise` are effects, so they need the one-time [confirmation](#effects-experimental).
+**Ringing** means an alarm notification on the PC that loops the Windows alarm sound until it's answered, with **Snooze 5 min** and **Dismiss** buttons, and the popup opens on the ringing timer. The timer stays in the list, with `ringingSinceMs` set, until it's dismissed (`DELETE`) or snoozed (`extend`, which restarts it that many minutes from now). Either one, from anywhere, also takes the notification down and stops the sound. `flash`, `sunset` and `sunrise` are effects, so they need the one-time [confirmation](#effects-experimental).
 
-**If the PC was asleep or off** when a timer was due, and it's more than 2 minutes late, it doesn't touch the lights. A reminder rings with `missed: true`, and a light change is skipped with a notification saying so.
+**If the PC was asleep or off** when a timer was due, and it's more than 2 minutes late, it doesn't touch the lights. A reminder rings with `missed: true` (a single chime, not the looping alarm), and a light change is skipped with a notification saying so.
 
 Timers are one-off. For something that repeats (every weekday at 18:00), use Windows Task Scheduler, Home Assistant or cron with the API.
 

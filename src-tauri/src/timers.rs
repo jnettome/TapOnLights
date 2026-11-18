@@ -20,7 +20,7 @@ use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt as _;
 use tokio::time::{MissedTickBehavior, interval};
 
-use crate::core;
+use crate::{alarm, core};
 
 /// How late a timer may fire and still act.
 pub const LATE_LIMIT_MS: u64 = 2 * 60_000;
@@ -282,7 +282,9 @@ fn ring_text(t: &Timer, outcome: Outcome) -> String {
     }
 }
 
-/// Windows sounds for notifications. Without one the toast is silent.
+/// Windows sounds for notifications (without one the toast is silent). On-time
+/// rings use the looping alarm toast instead (see `alarm`); this chime is for
+/// missed reminders and for when that toast can't be shown.
 const RING_SOUND: &str = "Reminder";
 const INFO_SOUND: &str = "Default";
 
@@ -300,7 +302,8 @@ fn notify(app: &AppHandle, title: &str, body: &str, sound: &str) {
 }
 
 /// Check the timers twice a second and act on those that come due. `ring` is
-/// called (once per check) when a reminder starts ringing, to bring up the popup.
+/// called (once per check) when a reminder starts ringing, to bring up the popup,
+/// and when the alarm notification is clicked.
 pub fn spawn_scheduler(app: AppHandle, ring: fn(&AppHandle)) {
     tauri::async_runtime::spawn(async move {
         let mut tick = interval(Duration::from_millis(500));
@@ -317,7 +320,13 @@ pub fn spawn_scheduler(app: AppHandle, ring: fn(&AppHandle)) {
                 if timer.action.rings() {
                     // A failed flash (bulbs offline) still rings.
                     rang = true;
-                    notify(&app, &title(timer), &ring_text(timer, *outcome), RING_SOUND);
+                    let (name, text) = (title(timer), ring_text(timer, *outcome));
+                    // On time: an alarm that loops until answered. Missed: one chime.
+                    let alarmed =
+                        *outcome == Outcome::Fire && alarm::show(&app, timer, &name, &text, ring);
+                    if !alarmed {
+                        notify(&app, &name, &text, RING_SOUND);
+                    }
                 } else if *outcome == Outcome::Missed {
                     notify(
                         &app,

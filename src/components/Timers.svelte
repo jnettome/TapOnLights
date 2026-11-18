@@ -226,9 +226,9 @@
 
       <p class="hint">
         {#if actionType === "flash"}
-          <Icon name="bell" size={13} />Rings: a notification, this popup, and a few pulses on {targetText}.
+          <Icon name="bell" size={13} />Rings: an alarm until you answer it, this popup, and a few pulses on {targetText}.
         {:else if actionType === "remind"}
-          <Icon name="bell" size={13} />Rings: a notification and this popup. The lights stay as they are.
+          <Icon name="bell" size={13} />Rings: an alarm until you answer it, and this popup. The lights stay as they are.
         {:else}
           <Icon name="bulb" size={13} />Quietly changes {targetText} when it ends.
         {/if}

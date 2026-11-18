@@ -122,7 +122,7 @@ Body of `POST /api/timers`:
   - `{"type": "scene", "name": "Relax"}`: apply a scene, silently.
 - **`targets`:** as for commands (names, rooms, IPs; empty = every bulb), resolved when the timer ends.
 
-**Ringing** means a Windows notification on the PC and the app's popup opening. A ringing timer stays listed (with `ringingSinceMs`) until it's dismissed with `DELETE /api/timers/{id}` or snoozed with `POST /api/timers/{id}/extend` (`{"minutes": 5}` rings again in 5 minutes). If the PC was asleep or off and a timer is more than 2 minutes late, it doesn't touch the lights: a reminder rings with `missed: true`, and a light change is skipped.
+**Ringing** means an alarm notification on the PC that loops its sound until answered (Snooze 5 min / Dismiss buttons), and the app's popup opening. A ringing timer stays listed (with `ringingSinceMs`) until it's dismissed with `DELETE /api/timers/{id}` or snoozed with `POST /api/timers/{id}/extend` (`{"minutes": 5}` rings again in 5 minutes). If the PC was asleep or off and a timer is more than 2 minutes late, it doesn't touch the lights: a reminder rings with `missed: true`, and a light change is skipped.
 
 Picking an action:
 

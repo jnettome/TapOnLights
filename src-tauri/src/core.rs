@@ -395,6 +395,7 @@ pub fn cancel_timer(app: &AppHandle, id: u64) -> Result<(), String> {
     if !state.timers.cancel(id) {
         return Err(format!("No timer {id}"));
     }
+    crate::alarm::hide(app, id);
     state.bulbs.notify();
     Ok(())
 }
@@ -409,6 +410,8 @@ pub fn extend_timer(app: &AppHandle, id: u64, minutes: f64) -> Result<TimerView,
         .timers
         .extend(id, (minutes * 60_000.0).round() as u64, timers::now_ms())
         .ok_or_else(|| format!("No timer {id}"))?;
+    // A snoozed timer stops ringing: take its alarm notification down.
+    crate::alarm::hide(app, id);
     state.bulbs.notify();
     Ok(timer.into())
 }
