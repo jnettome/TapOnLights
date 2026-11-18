@@ -87,11 +87,20 @@ impl Default for Settings {
 const APP_DIR: &str = "TapOnLights";
 const LEGACY_APP_DIR: &str = "Tapo Desktop";
 
-fn path_in(dir: &str) -> PathBuf {
-    let root = std::env::var_os("APPDATA")
+fn data_dir(name: &str) -> PathBuf {
+    std::env::var_os("APPDATA")
         .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    root.join(dir).join("settings.json")
+        .unwrap_or_else(std::env::temp_dir)
+        .join(name)
+}
+
+/// `%APPDATA%\TapOnLights`: settings and other saved state.
+pub fn app_dir() -> PathBuf {
+    data_dir(APP_DIR)
+}
+
+fn path_in(dir: &str) -> PathBuf {
+    data_dir(dir).join("settings.json")
 }
 
 fn path() -> PathBuf {

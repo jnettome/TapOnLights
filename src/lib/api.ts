@@ -2,7 +2,17 @@
 // when the same UI is served by the built-in web server.
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { EffectName, EffectOptions, Patch, SceneInput, SettingsUpdate, SettingsView, Snapshot } from "./types";
+import type {
+  EffectName,
+  EffectOptions,
+  Patch,
+  SceneInput,
+  SettingsUpdate,
+  SettingsView,
+  Snapshot,
+  Timer,
+  TimerInput,
+} from "./types";
 
 export interface Api {
   desktop: boolean;
@@ -17,9 +27,14 @@ export interface Api {
   applyScene(name: string, targets: string[]): Promise<void>;
   saveScene(name: string, scene: SceneInput): Promise<void>;
   deleteScene(name: string): Promise<void>;
+  startTimer(input: TimerInput): Promise<Timer>;
+  /** Cancel a timer, or dismiss a ringing one. */
+  cancelTimer(id: number): Promise<void>;
+  /** Add minutes; a ringing timer is snoozed for that long instead. */
+  extendTimer(id: number, minutes: number): Promise<Timer>;
   getSettings(): Promise<SettingsView>;
   saveSettings(update: SettingsUpdate): Promise<SettingsView>;
-  /** Desktop events: "navigate" (payload: view name) and "popup-shown". */
+  /** Desktop events: "navigate" (payload: a view name, or "ring" when a timer rings) and "popup-shown". */
   on(event: "navigate" | "popup-shown", handler: (payload: unknown) => void): () => void;
   hide(): void;
   openWeb(): void;
@@ -49,6 +64,9 @@ function tauriApi(): Api {
     applyScene: (name, targets) => invoke("apply_scene", { name, targets }),
     saveScene: (name, scene) => invoke("save_scene", { name, scene }),
     deleteScene: (name) => invoke("delete_scene", { name }),
+    startTimer: (input) => invoke<Timer>("start_timer", { input }),
+    cancelTimer: (id) => invoke("cancel_timer", { id }),
+    extendTimer: (id, minutes) => invoke<Timer>("extend_timer", { id, minutes }),
     getSettings: () => invoke<SettingsView>("get_settings"),
     saveSettings: (update) => invoke<SettingsView>("save_settings", { update }),
     on: (event, handler) => tauriListen(event, handler),
@@ -101,6 +119,9 @@ function httpApi(): Api {
     applyScene: (name, targets) => http("POST", "/api/scenes/apply", { name, targets }),
     saveScene: (name, scene) => http("POST", "/api/scenes", { name, scene }),
     deleteScene: (name) => http("DELETE", `/api/scenes/${encodeURIComponent(name)}`),
+    startTimer: (input) => http<Timer>("POST", "/api/timers", input),
+    cancelTimer: (id) => http("DELETE", `/api/timers/${id}`),
+    extendTimer: (id, minutes) => http<Timer>("POST", `/api/timers/${id}/extend`, { minutes }),
     getSettings: () => http<SettingsView>("GET", "/api/settings"),
     saveSettings: (update) => http<SettingsView>("PUT", "/api/settings", update),
     on: () => () => {},

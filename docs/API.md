@@ -45,6 +45,9 @@ The server only answers requests addressed to an IP address or `localhost`; any 
 | `POST` | `/api/effects/start` | `{"name": "candle", "targets": [...], "options": {...}}` | `204`; see [Effects](#effects-experimental). `409` until effects have been confirmed once. |
 | `POST` | `/api/effects/acknowledge` | — | `204`; records that the user accepted the experimental-effects warning |
 | `POST` | `/api/effects/stop` | `{"targets": [...]}` | `204`; looping effects put the lights back to how they were |
+| `POST` | `/api/timers` | `{"minutes": 10, "label": "Pasta", "action": {"type": "flash"}, "targets": []}` | `201`: the new timer; see [Timers](#timers). `409` for `flash`, `sunset` or `sunrise` until effects have been confirmed once. |
+| `DELETE` | `/api/timers/{id}` | — | `204`; cancels a timer, or dismisses a ringing one. `404` for an unknown id. |
+| `POST` | `/api/timers/{id}/extend` | `{"minutes": 5}` | `200`: the timer. Adds time, or snoozes a ringing timer for that long. |
 | `POST` | `/api/refresh` | — | `204`; re-reads every bulb now instead of waiting for the next 10 s poll |
 | `GET` | `/api/settings` | — | `200`: bulbs (`ip`, `name`, `room`), theme and other preferences |
 | `PUT` | `/api/settings` | `{"devices": [{"ip", "name", "room"}, ...], "theme": "system"}` | `200`; **replaces the whole bulb list**. `theme` is `system`, `light` or `dark`. |
@@ -208,10 +211,59 @@ using the TapOnLights API, so I remember to stop working.
 ```
 
 ```text
-Every 25 minutes until I tell you to stop, flash the desk lamp green once (Pomodoro breaks).
+Set a 10-minute pasta timer that flashes the kitchen lights.
+```
+
+```text
+Turn the office lights off at 23:30, with a 15-minute sunset before.
 ```
 
 If effects haven't been confirmed yet, the assistant gets a `409` that explains the warning. The guide at `/llms.txt` tells it to show you the warning and ask before it confirms.
+
+## Timers
+
+Timers run inside the app, on the PC's clock, so they keep going while the popup is closed and when the request came from a phone. They're saved, so they survive a restart.
+
+A timer ends either after a countdown or at a clock time:
+
+| Field | Values |
+|---|---|
+| `minutes`, `seconds` | A countdown; use either or both (1 second to 24 hours in total). |
+| `at` | `"HH:MM"` on the 24-hour clock: the next time the PC's clock shows it (tomorrow if it's already past). Not together with `minutes`/`seconds`. |
+| `label` | Optional reminder text, up to 40 characters. It's the notification's title. |
+| `action` | What happens when it ends (below). Default: `{"type": "remind"}`. |
+| `targets` | Bulb IPs, names or rooms for the action, resolved when the timer ends. Empty means every bulb. |
+
+Actions. The first two **ring**; the others change the lights quietly:
+
+| `action` | When the timer ends |
+|---|---|
+| `{"type": "flash"}` | Rings, and the lights pulse 4 times (the `alert` effect), then go back to how they were. |
+| `{"type": "remind"}` | Rings; the lights stay as they are. |
+| `{"type": "off"}` / `{"type": "on"}` | Turns the lights off or on. |
+| `{"type": "sunset", "minutes": 15}` | Starts a sunset fade of that length (0.5–120, default 15). |
+| `{"type": "sunrise", "minutes": 15}` | Starts a sunrise fade of that length. |
+| `{"type": "scene", "name": "Relax"}` | Applies a scene. |
+
+**Ringing** means a Windows notification on the PC, and the popup opens on the ringing timer. The timer stays in the list, with `ringingSinceMs` set, until it's dismissed (`DELETE`) or snoozed (`extend`, which restarts it that many minutes from now). `flash`, `sunset` and `sunrise` are effects, so they need the one-time [confirmation](#effects-experimental).
+
+**If the PC was asleep or off** when a timer was due, and it's more than 2 minutes late, it doesn't touch the lights. A reminder rings with `missed: true`, and a light change is skipped with a notification saying so.
+
+Timers are one-off. For something that repeats (every weekday at 18:00), use Windows Task Scheduler, Home Assistant or cron with the API.
+
+```sh
+# A 10-minute pasta timer that flashes the kitchen
+curl -X POST http://localhost:4530/api/timers -H "Content-Type: application/json" \
+     -d '{"minutes": 10, "label": "Pasta", "action": {"type": "flash"}, "targets": ["Kitchen"]}'
+
+# Lights off at 23:30, with a 15-minute sunset first
+curl -X POST http://localhost:4530/api/timers -H "Content-Type: application/json" \
+     -d '{"at": "23:15", "action": {"type": "sunset", "minutes": 15}}'
+
+# Snooze timer 3 for 5 minutes, then dismiss it
+curl -X POST http://localhost:4530/api/timers/3/extend -H "Content-Type: application/json" -d '{"minutes": 5}'
+curl -X DELETE http://localhost:4530/api/timers/3
+```
 
 ## The snapshot
 
@@ -246,7 +298,12 @@ If effects haven't been confirmed yet, the assistant gets a `409` that explains 
   "hasAccount": true,
   "temperatureRange": [2500, 6500],
   "backdrop": true,
-  "effectsAcknowledged": false
+  "effectsAcknowledged": false,
+  "timers": [
+    { "id": 3, "label": "Pasta", "kind": "countdown", "startedMs": 1795464000000, "endsMs": 1795464600000,
+      "action": { "type": "flash" }, "targets": ["Kitchen"], "ringingSinceMs": null, "missed": false, "rings": true }
+  ],
+  "nowMs": 1795464123456
 }
 ```
 
@@ -255,6 +312,8 @@ If effects haven't been confirmed yet, the assistant gets a `409` that explains 
 - **`signal`:** Wi-Fi signal level reported by the bulb.
 - **`effect`:** the [effect](#effects-experimental) running on the bulb (`breathe`, `candle`, `colorLoop`, `sunrise`, `sunset` or `alert`), or `null`.
 - **`effectsAcknowledged`:** whether the one-time [experimental-effects](#effects-experimental) warning has been accepted on this PC.
+- **`timers`:** running and ringing [timers](#timers), ringing first, then by end time. Times are unix milliseconds. `kind` is `countdown` or `alarm` (set with `at`), and `rings` says whether the action rings.
+- **`nowMs`:** the PC's clock when the snapshot was made. Count timers down from it (`endsMs - nowMs`) rather than from your own clock.
 - **`backdrop`:** whether the desktop popup uses the Windows 11 background; scripts can ignore it.
 
 ## Live updates
@@ -277,8 +336,8 @@ data: {"bulbs":[...],"scenes":[...],...}
 | `400` | Plain-text reason: a target that matches no bulb or room, an unknown scene, an empty patch, an invalid IP address in settings, … |
 | `401` | A password is set and was missing or wrong |
 | `403` | The URL's host isn't an IP address or `localhost` |
-| `404` | Unknown `/api/...` path |
-| `409` | Starting an effect before effects have been confirmed once (see [Effects](#effects-experimental)) |
+| `404` | Unknown `/api/...` path, or a timer id that doesn't exist |
+| `409` | Starting an effect, or a `flash`, `sunset` or `sunrise` timer, before effects have been confirmed once (see [Effects](#effects-experimental)) |
 | `415` | Missing `Content-Type: application/json` |
 | `422` | JSON with the wrong shape or an unknown field; the message names it |
 
@@ -381,4 +440,5 @@ Things to know:
 
 - **The password goes into the chat.** If you include it, the assistant and its provider see it. Use a password you don't use anywhere else.
 - **Settings are off-limits by default.** The guide tells assistants not to change settings or delete scenes unless you ask. The API can't touch your Tapo account or the web-access settings at all.
-- **Automations** ("every evening at sunset…") need something that keeps running, such as Windows Task Scheduler, Home Assistant or cron. Ask the assistant to write that script for you.
+- **One-off timers and reminders** ("remind me in 20 minutes", "lights off at 23:30") run in the app; see [Timers](#timers).
+- **Repeating automations** ("every evening at sunset…") need something that keeps running, such as Windows Task Scheduler, Home Assistant or cron. Ask the assistant to write that script for you.

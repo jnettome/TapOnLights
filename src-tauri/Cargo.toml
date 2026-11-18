@@ -3,7 +3,7 @@ name = "taponlights"
 version = "0.2.0"
 description = "Fast local tray controller for TP-Link Tapo smart bulbs on Windows"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.90"
 license = "MIT"
 repository = "https://github.com/jnettome/TapOnLights"
 publish = false
@@ -15,7 +15,9 @@ tauri-build = { version = "2.7", features = [] }
 tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2.5"
 tauri-plugin-autostart = "2.7"
+tauri-plugin-notification = "2.8"
 tapo = "0.12.2"
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
 tokio = { version = "1", features = ["sync", "time", "macros", "net"] }
 axum = "0.8"
 futures-util = "0.3"

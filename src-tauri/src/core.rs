@@ -12,11 +12,13 @@ use crate::effects::{EffectName, EffectOptions, Effects};
 use crate::secrets;
 use crate::server::{WebServer, WebStatus};
 use crate::settings::{self, DeviceEntry, Scene, Settings};
+use crate::timers::{self, Outcome, Timer, TimerAction, TimerInput, TimerView, Timers};
 
 pub struct AppState {
     pub settings: Mutex<Settings>,
     pub bulbs: Arc<Manager>,
     pub effects: Arc<Effects>,
+    pub timers: Timers,
     pub web: WebServer,
     /// When the popup was last hidden (ms since start), to ignore the tray click that hid it.
     pub last_hidden_ms: AtomicU64,
@@ -109,6 +111,10 @@ pub struct Snapshot {
     pub backdrop: bool,
     /// Effects are experimental; until this is true they can't be started.
     pub effects_acknowledged: bool,
+    /// Ringing first, then by end time.
+    pub timers: Vec<TimerView>,
+    /// This PC's clock (unix ms), so clients can count timers down without clock skew.
+    pub now_ms: u64,
 }
 
 pub fn snapshot(app: &AppHandle) -> Snapshot {
@@ -146,6 +152,13 @@ pub fn snapshot(app: &AppHandle) -> Snapshot {
         temperature_range: TEMPERATURE_RANGE,
         backdrop: state.backdrop,
         effects_acknowledged,
+        timers: state
+            .timers
+            .list()
+            .into_iter()
+            .map(TimerView::from)
+            .collect(),
+        now_ms: timers::now_ms(),
     }
 }
 
@@ -329,6 +342,119 @@ pub fn delete_scene(app: &AppHandle, name: &str) -> Result<(), String> {
     update_settings(app, |s| {
         s.custom_scenes.remove(name);
     })
+}
+
+fn scene_exists(app: &AppHandle, name: &str) -> bool {
+    builtin_scenes().iter().any(|(n, _)| *n == name)
+        || state(app)
+            .settings
+            .lock()
+            .unwrap()
+            .custom_scenes
+            .contains_key(name)
+}
+
+/// Start a timer. Targets are checked now but stored as given (names, rooms or
+/// IPs) and resolved again when the timer ends.
+pub fn start_timer(app: &AppHandle, input: TimerInput) -> Result<TimerView, String> {
+    let label = timers::clean_label(&input.label)?;
+    let action = input.action.clone().unwrap_or(TimerAction::Remind);
+    match &action {
+        TimerAction::Sunset { minutes } | TimerAction::Sunrise { minutes }
+            if !(0.5..=120.0).contains(minutes) =>
+        {
+            return Err("Fades last 0.5–120 minutes".into());
+        }
+        TimerAction::Scene { name } if !scene_exists(app, name) => {
+            return Err(format!("No scene named “{name}”"));
+        }
+        _ => {}
+    }
+    if action.uses_effects() && !effects_acknowledged(app) {
+        return Err(EFFECTS_NOT_ACKNOWLEDGED.into());
+    }
+    resolve_targets(app, &input.targets)?;
+    let now = chrono::Local::now();
+    let (kind, ends_ms) = timers::deadline(&input, &now)?;
+    let state = state(app);
+    let timer = state.timers.add(
+        kind,
+        ends_ms,
+        now.timestamp_millis().max(0) as u64,
+        label,
+        action,
+        input.targets.iter().map(|t| t.trim().to_string()).collect(),
+    )?;
+    state.bulbs.notify();
+    Ok(timer.into())
+}
+
+/// Cancel a timer, or dismiss a ringing one.
+pub fn cancel_timer(app: &AppHandle, id: u64) -> Result<(), String> {
+    let state = state(app);
+    if !state.timers.cancel(id) {
+        return Err(format!("No timer {id}"));
+    }
+    state.bulbs.notify();
+    Ok(())
+}
+
+/// Add minutes to a timer; a ringing timer is snoozed for that long instead.
+pub fn extend_timer(app: &AppHandle, id: u64, minutes: f64) -> Result<TimerView, String> {
+    if !minutes.is_finite() || !(1.0 / 60.0..=24.0 * 60.0).contains(&minutes) {
+        return Err("Add 1 second to 24 hours".into());
+    }
+    let state = state(app);
+    let timer = state
+        .timers
+        .extend(id, (minutes * 60_000.0).round() as u64, timers::now_ms())
+        .ok_or_else(|| format!("No timer {id}"))?;
+    state.bulbs.notify();
+    Ok(timer.into())
+}
+
+/// What a timer does to the lights when it ends. Missed timers don't touch them.
+pub fn run_timer_action(app: &AppHandle, timer: &Timer, outcome: Outcome) -> Result<(), String> {
+    if outcome == Outcome::Missed {
+        return Ok(());
+    }
+    let targets = resolve_targets(app, &timer.targets)?;
+    let fade = |minutes: f64| EffectOptions {
+        minutes: Some(minutes),
+        ..Default::default()
+    };
+    match &timer.action {
+        TimerAction::Remind => Ok(()),
+        // Ringing matters more than the flash: skip it quietly if effects aren't OK'd.
+        TimerAction::Flash if !effects_acknowledged(app) => Ok(()),
+        TimerAction::Flash => start_effect(
+            app,
+            EffectName::Alert,
+            &targets,
+            EffectOptions {
+                times: Some(4),
+                ..Default::default()
+            },
+        ),
+        TimerAction::Off | TimerAction::On => {
+            command(
+                app,
+                &targets,
+                Patch {
+                    on: Some(timer.action == TimerAction::On),
+                    ..Default::default()
+                },
+            );
+            Ok(())
+        }
+        TimerAction::Sunset { minutes } => {
+            start_effect(app, EffectName::Sunset, &targets, fade(*minutes))
+        }
+        TimerAction::Sunrise { minutes } => {
+            start_effect(app, EffectName::Sunrise, &targets, fade(*minutes))
+        }
+        TimerAction::Scene { name } => apply_scene(app, name, &targets),
+    }
 }
 
 fn update_settings(app: &AppHandle, f: impl FnOnce(&mut Settings)) -> Result<(), String> {

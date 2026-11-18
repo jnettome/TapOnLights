@@ -28,6 +28,7 @@ use crate::core::{self, SceneInput, SettingsUpdate};
 use crate::effects::{EffectName, EffectOptions};
 use crate::secrets;
 use crate::settings::WebSettings;
+use crate::timers::{TimerInput, TimerView};
 
 const AGENT_GUIDE: &str = include_str!("../assets/llms.txt");
 
@@ -156,6 +157,9 @@ fn router(state: ServerState) -> Router {
         .route("/api/scenes/apply", post(apply_scene))
         .route("/api/scenes", post(save_scene))
         .route("/api/scenes/{name}", delete(delete_scene))
+        .route("/api/timers", post(start_timer))
+        .route("/api/timers/{id}", delete(cancel_timer))
+        .route("/api/timers/{id}/extend", post(extend_timer))
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/llms.txt", get(llms_txt))
         .fallback(get(static_file))
@@ -395,6 +399,46 @@ async fn delete_scene(
 ) -> Result<StatusCode, ApiError> {
     core::delete_scene(&s.app, &name).map_err(bad_request)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn start_timer(
+    State(s): State<ServerState>,
+    Json(input): Json<TimerInput>,
+) -> Result<(StatusCode, Json<TimerView>), ApiError> {
+    if input.action.as_ref().is_some_and(|a| a.uses_effects())
+        && !core::effects_acknowledged(&s.app)
+    {
+        return Err((StatusCode::CONFLICT, core::EFFECTS_NOT_ACKNOWLEDGED.into()));
+    }
+    let timer = core::start_timer(&s.app, input).map_err(bad_request)?;
+    Ok((StatusCode::CREATED, Json(timer)))
+}
+
+async fn cancel_timer(
+    State(s): State<ServerState>,
+    Path(id): Path<u64>,
+) -> Result<StatusCode, ApiError> {
+    core::cancel_timer(&s.app, id).map_err(|e| (StatusCode::NOT_FOUND, e))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExtendTimerBody {
+    minutes: f64,
+}
+
+async fn extend_timer(
+    State(s): State<ServerState>,
+    Path(id): Path<u64>,
+    Json(body): Json<ExtendTimerBody>,
+) -> Result<Json<TimerView>, ApiError> {
+    if !core::state(&s.app).timers.list().iter().any(|t| t.id == id) {
+        return Err((StatusCode::NOT_FOUND, format!("No timer {id}")));
+    }
+    core::extend_timer(&s.app, id, body.minutes)
+        .map(Json)
+        .map_err(bad_request)
 }
 
 async fn get_settings(State(s): State<ServerState>) -> Json<core::SettingsView> {

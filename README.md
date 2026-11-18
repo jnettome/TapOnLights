@@ -19,6 +19,7 @@ A fast, local tray app for TP-Link Tapo smart bulbs on Windows. Click the tray i
 - **Instant control.** Each bulb keeps one open connection, the UI updates the moment you move a control, and while you drag only the latest value is sent. A change reaches the bulb in about 100–135 ms.
 - **Everything the bulbs do day to day:** power, brightness, white temperature (2500–6500 K) with presets, a color wheel with quick swatches, and scenes (six built in, plus your own).
 - **Effects (experimental):** breathe, candle flicker, color loop, sunrise and sunset fades (5–60 minutes, or up to 120 from the API), and an alert pulse that puts the lights back afterwards. Pick a color for breathe, candle, color loop and alert, and a speed for breathe and color loop. Effects run in the app in small, frequent steps for smooth motion (the bulbs have no transitions of their own), and stop as soon as you change a light. See [Effects](#effects-experimental) before relying on them.
+- **Timers and alarms.** A countdown (5, 10, 25-minute Pomodoro, 45, or any length) or an alarm at a clock time, with an optional reminder. When it ends it rings: a Windows notification, the popup opens, and the lights can pulse, until you snooze or dismiss it. Or have it change the lights quietly instead: off, on, a sunset or sunrise fade, or a scene ("lights off at 23:30"). Quick timers are in the tray menu, and the API and AI assistants can set them too.
 - **Alerts for scripts and AI assistants.** Flash the lights green when a build passes or red when it fails, or blue when the doorbell rings; the lights go back to exactly how they were.
 - **Rooms and groups.** Control all lights, a room, or one bulb; the list shows each bulb's state with its own switch.
 - **Stays in sync.** Changes made in the Tapo phone app show up within about 10 seconds.
@@ -133,6 +134,7 @@ Each bulb has its own worker task that owns one signed-in session. A command upd
 ## Your data
 
 - **Settings:** `%APPDATA%\TapOnLights\settings.json` (bulbs, scenes, preferences, the web password hash).
+- **Timers:** `%APPDATA%\TapOnLights\timers.json` (running and ringing timers, so alarms survive a restart).
 - **Tapo password:** Windows Credential Manager, generic credential `TapOnLights`. It is never written to the settings file.
 - **Network:** the app only talks to the bulb addresses you enter, plus the optional web page you serve.
 
@@ -142,7 +144,7 @@ To remove everything after uninstalling, delete that folder and the credential (
 
 Prerequisites (Windows):
 
-- [Rust](https://rustup.rs) 1.88 or newer (MSVC toolchain)
+- [Rust](https://rustup.rs) 1.90 or newer (MSVC toolchain)
 - [Node.js](https://nodejs.org) 20.19+ or 22.12+
 - [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with "Desktop development with C++"
 - WebView2, already included in Windows 11

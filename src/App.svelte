@@ -7,6 +7,8 @@
   import Icon, { type IconName } from "./components/Icon.svelte";
   import Settings from "./components/Settings.svelte";
   import Slider from "./components/Slider.svelte";
+  import TimerStrip from "./components/TimerStrip.svelte";
+  import Timers from "./components/Timers.svelte";
   import Toggle from "./components/Toggle.svelte";
 
   const SWATCHES: HueSat[] = [
@@ -57,7 +59,7 @@
     ["normal", "Normal"],
     ["fast", "Fast"],
   ];
-  let view = $state<"main" | "settings">("main");
+  let view = $state<"main" | "settings" | "timers">("main");
   let target = $state("all");
   let themePreview = $state<Theme | null>(null);
   let systemDark = $state(window.matchMedia("(prefers-color-scheme: dark)").matches);
@@ -98,6 +100,25 @@
 
   $effect(() => {
     if (snap && target !== "all" && selected.length === 0) target = "all";
+  });
+
+  // ---- timers: count down on the PC's clock (the snapshot's nowMs), ticking only while any exist
+  const timers = $derived(snap?.timers ?? []);
+  /** Timer targets for the selection: [] (all), a room name, or a bulb IP. */
+  const timerTargets = $derived(
+    target === "all" ? [] : target.startsWith("room:") ? [target.slice(5)] : [target],
+  );
+  let clockOffset = 0;
+  let now = $state(Date.now());
+  $effect(() => {
+    if (snap) clockOffset = snap.nowMs - Date.now();
+  });
+  $effect(() => {
+    if (timers.length === 0) return;
+    const tick = () => (now = Date.now() + clockOffset);
+    tick();
+    const id = window.setInterval(tick, 250);
+    return () => clearInterval(id);
   });
 
   // ---- theme ---------------------------------------------------------------
@@ -230,25 +251,26 @@
       api.startEffect(running.name, targetIps, effectOptions(running)).catch((e) => showToast(errorText(e)));
     }
   }
-  /** Effect waiting for the one-time experimental-effects confirmation. */
-  let confirmingEffect = $state<EffectDef | null>(null);
+  /** An effect or timer waiting for the one-time experimental-effects confirmation. */
+  let confirming = $state<{ label: string; start: () => Promise<unknown> } | null>(null);
 
   function toggleEffect(effect: EffectDef) {
+    const start = () => api.startEffect(effect.name, targetIps, effectOptions(effect));
     if (runningEffects.has(effect.name)) {
       api.stopEffects(targetIps).catch((e) => showToast(errorText(e)));
     } else if (!snap?.effectsAcknowledged) {
-      confirmingEffect = effect;
+      confirming = { label: `Start ${effect.label}`, start };
     } else {
-      api.startEffect(effect.name, targetIps, effectOptions(effect)).catch((e) => showToast(errorText(e)));
+      start().catch((e) => showToast(errorText(e)));
     }
   }
   async function confirmEffects() {
-    const effect = confirmingEffect;
-    confirmingEffect = null;
-    if (!effect) return;
+    const pending = confirming;
+    confirming = null;
+    if (!pending) return;
     try {
       await api.acknowledgeEffects();
-      await api.startEffect(effect.name, targetIps, effectOptions(effect));
+      await pending.start();
     } catch (e) {
       showToast(errorText(e));
     }
@@ -300,14 +322,19 @@
       (s) => (snap = s),
       (ok) => (connected = ok),
     );
-    const offNavigate = api.on("navigate", (to) => (view = to === "settings" ? "settings" : "main"));
+    const offNavigate = api.on("navigate", (to) => {
+      if (to === "settings" || to === "timers") view = to;
+      // A timer is ringing: show it (the strip on the main view, or the Timers panel).
+      else if (to === "ring") view = view === "timers" ? "timers" : "main";
+      else view = "main";
+    });
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const onMedia = (e: MediaQueryListEvent) => (systemDark = e.matches);
     media.addEventListener("change", onMedia);
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (confirmingEffect) confirmingEffect = null;
-      else if (view === "settings") view = "main";
+      if (confirming) confirming = null;
+      else if (view !== "main") view = "main";
       else api.hide();
     };
     window.addEventListener("keydown", onKey);
@@ -323,10 +350,26 @@
 <div class="app" class:web={!api.desktop}>
   {#if view === "settings"}
     <Settings {api} web={snap?.web ?? null} onclose={() => (view = "main")} onpreviewtheme={(t) => (themePreview = t)} />
+  {:else if view === "timers"}
+    <Timers
+      {api}
+      {timers}
+      {bulbs}
+      scenes={snap?.scenes ?? []}
+      {now}
+      targets={timerTargets}
+      targetLabel={title}
+      effectsAcknowledged={!!snap?.effectsAcknowledged}
+      onclose={() => (view = "main")}
+      onneedeffects={(label, start) => (confirming = { label, start })}
+      ontoast={showToast} />
   {:else}
     <header>
       <h1>Lights</h1>
       <div class="actions">
+        <button class="icon-button" onclick={() => (view = "timers")} aria-label="Timers" title="Timers">
+          <Icon name="timer" />
+        </button>
         <button class="icon-button" class:spin={spinning} onclick={refresh} aria-label="Refresh" title="Refresh">
           <Icon name="refresh" />
         </button>
@@ -340,6 +383,8 @@
         {/if}
       </div>
     </header>
+
+    <TimerStrip {api} {timers} {now} onopen={() => (view = "timers")} ontoast={showToast} />
 
     <main class="content">
       {#if !connected}
@@ -597,7 +642,7 @@
     {/if}
   {/if}
 
-  {#if confirmingEffect}
+  {#if confirming}
     <div class="overlay">
       <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="fx-title" aria-describedby="fx-body">
         <div class="dialog-icon"><Icon name="alert" size={22} /></div>
@@ -610,9 +655,9 @@
         </ul>
         <p class="dialog-note">You'll only be asked once on this PC.</p>
         <div class="dialog-actions">
-          <button class="button ghost" onclick={() => (confirmingEffect = null)}>Cancel</button>
+          <button class="button ghost" onclick={() => (confirming = null)}>Cancel</button>
           <!-- svelte-ignore a11y_autofocus -->
-          <button class="button primary" autofocus onclick={confirmEffects}>Start {confirmingEffect.label}</button>
+          <button class="button primary" autofocus onclick={confirmEffects}>{confirming.label}</button>
         </div>
       </div>
     </div>

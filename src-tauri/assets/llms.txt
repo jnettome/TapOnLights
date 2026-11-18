@@ -27,6 +27,9 @@ Base URL: {{BASE_URL}}
 | POST | /api/effects/start | `{"name": "candle", "targets": [...], "options": {...}}` | 204 (see Effects) |
 | POST | /api/effects/stop | `{"targets": [...]}` | 204 (looping effects restore the earlier look) |
 | POST | /api/effects/acknowledge | — | 204 (records the user's one-time OK for experimental effects; see Effects) |
+| POST | /api/timers | `{"minutes": 10, "label": "Pasta", "action": {"type": "flash"}, "targets": [...]}` | 201, the timer (see Timers) |
+| DELETE | /api/timers/{id} | — | 204 (cancels a timer, or dismisses a ringing one) |
+| POST | /api/timers/{id}/extend | `{"minutes": 5}` | 200, the timer (adds time; snoozes a ringing timer) |
 | POST | /api/refresh | — | 204 (re-read every bulb now) |
 | GET | /api/events | — | server-sent events; a `snapshot` event with the full state on every change |
 | GET | /api/settings | — | 200: bulbs list (IP, name, room) and theme |
@@ -99,8 +102,43 @@ Use `times` 2 or 3.
 curl -X POST {{BASE_URL}}/api/effects/start -H "Content-Type: application/json" -d '{"name": "alert", "options": {"color": {"hue": 120, "saturation": 100}, "times": 2}}'
 ```
 
-- **Scheduled or recurring alerts** (every day at 18:00) need something that keeps running, such as Windows Task Scheduler or cron. Offer to create that, rather than promising to remember.
+- **One-off reminders and timed changes** ("remind me in 20 minutes", "lights off at 23:30") are timers: see Timers. Don't sleep or wait yourself.
+- **Recurring alerts** (every day at 18:00) need something that keeps running, such as Windows Task Scheduler or cron. Offer to create that, rather than promising to remember.
 - **When the user asks to be notified about a task you're running** (a build, tests, a deploy), send the alert as soon as the result is known: green for success, red for failure.
+
+## Timers
+
+Use timers for anything that should happen later: a cooking or Pomodoro timer, a reminder at a clock time, or a light change ("off at 23:30"). They run inside the app on the PC's clock and survive a restart, so you don't need to keep running.
+
+Body of `POST /api/timers`:
+
+- **When:** `minutes` and/or `seconds` (a countdown, 1 s to 24 h in total), or `at`: `"HH:MM"` on the 24-hour clock, the next time the PC's clock shows it (tomorrow if already past). Not both.
+- **`label`:** optional reminder text, up to 40 characters; it becomes the notification title. Use the user's words ("Pasta", "Call Ana").
+- **`action`:** what happens at the end (default `{"type": "remind"}`):
+  - `{"type": "flash"}`: **rings** and pulses the target lights 4 times, then restores them. Needs the one-time effects OK (else 409; see Effects).
+  - `{"type": "remind"}`: **rings** without touching the lights.
+  - `{"type": "off"}`, `{"type": "on"}`: power, silently.
+  - `{"type": "sunset", "minutes": 15}`, `{"type": "sunrise", "minutes": 15}`: start that fade (0.5–120 min, default 15), silently. Effects; needs the OK.
+  - `{"type": "scene", "name": "Relax"}`: apply a scene, silently.
+- **`targets`:** as for commands (names, rooms, IPs; empty = every bulb), resolved when the timer ends.
+
+**Ringing** means a Windows notification on the PC and the app's popup opening. A ringing timer stays listed (with `ringingSinceMs`) until it's dismissed with `DELETE /api/timers/{id}` or snoozed with `POST /api/timers/{id}/extend` (`{"minutes": 5}` rings again in 5 minutes). If the PC was asleep or off and a timer is more than 2 minutes late, it doesn't touch the lights: a reminder rings with `missed: true`, and a light change is skipped.
+
+Picking an action:
+
+- "Set a timer", "remind me", "tell me when": `flash` if the user mentions the lights or effects are already OK'd, otherwise `remind`.
+- "Lights off at…" / "turn off in 30 minutes": `off`; a gentle "fade out" or "go to sleep": `sunset` timed to start that many minutes earlier.
+- "Wake me with light at 7": `sunrise` with `at` a little before 07:00 (a 15-minute fade starting at 06:45 reaches full brightness at 07:00).
+
+Confirm what you set with the end time from the response (`endsMs`, unix ms). Timers are one-off; for repeats, see Recurring alerts.
+
+```sh
+# 25-minute Pomodoro on the desk lamp
+curl -X POST {{BASE_URL}}/api/timers -H "Content-Type: application/json" -d '{"minutes": 25, "label": "Focus", "action": {"type": "flash"}, "targets": ["Desk"]}'
+
+# Reminder at 15:30, lights untouched
+curl -X POST {{BASE_URL}}/api/timers -H "Content-Type: application/json" -d '{"at": "15:30", "label": "Call Ana"}'
+```
 
 ## Snapshot fields
 
@@ -113,6 +151,8 @@ curl -X POST {{BASE_URL}}/api/effects/start -H "Content-Type: application/json" 
   - `signal`: Wi-Fi signal level, 0–3
   - `effect`: the running effect, or null
 - **`effectsAcknowledged`:** whether the user has OK'd experimental effects on this PC.
+- **`timers[]`:** `id`, `label`, `kind` (`countdown` or `alarm`), `startedMs`, `endsMs`, `action`, `targets`, `ringingSinceMs` (null unless ringing), `missed`, `rings`. Ringing first, then by end time.
+- **`nowMs`:** the PC's clock (unix ms). Time left is `endsMs - nowMs`.
 - **`scenes[]`:** `name`, `builtin`, `brightness`, `temperature` (or null), `color` (or null).
 - **Also:** `temperatureRange`, and `web` (the server's status).
 
@@ -156,8 +196,8 @@ Invoke-RestMethod -Method Post -Uri {{BASE_URL}}/api/command -ContentType "appli
 - **400:** a plain-text message, for example an unknown bulb or room (the message lists the known bulbs), an unknown scene, or an empty patch.
 - **401:** password required or wrong.
 - **403:** use an IP address or localhost in the URL.
-- **404:** unknown endpoint.
-- **409:** an effect was started before the user OK'd experimental effects; see Effects.
+- **404:** unknown endpoint, or no timer with that id.
+- **409:** an effect, or a `flash`/`sunset`/`sunrise` timer, was started before the user OK'd experimental effects; see Effects.
 - **415:** missing `Content-Type: application/json`.
 - **422:** the JSON has the wrong shape or an unknown field; the message says which.
 

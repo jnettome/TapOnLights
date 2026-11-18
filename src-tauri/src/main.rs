@@ -6,18 +6,20 @@ mod effects;
 mod secrets;
 mod server;
 mod settings;
+mod timers;
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, Rect, WebviewWindow, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
 
 use crate::bulbs::Patch;
 use crate::core::{AppState, SceneInput, SettingsUpdate, SettingsView, Snapshot};
+use crate::timers::{TimerAction, TimerInput, TimerView};
 
 // ---- commands -------------------------------------------------------------
 
@@ -69,6 +71,21 @@ fn save_scene(app: AppHandle, name: String, scene: SceneInput) -> Result<(), Str
 #[tauri::command]
 fn delete_scene(app: AppHandle, name: String) -> Result<(), String> {
     core::delete_scene(&app, &name)
+}
+
+#[tauri::command]
+fn start_timer(app: AppHandle, input: TimerInput) -> Result<TimerView, String> {
+    core::start_timer(&app, input)
+}
+
+#[tauri::command]
+fn cancel_timer(app: AppHandle, id: u64) -> Result<(), String> {
+    core::cancel_timer(&app, id)
+}
+
+#[tauri::command]
+fn extend_timer(app: AppHandle, id: u64, minutes: f64) -> Result<TimerView, String> {
+    core::extend_timer(&app, id, minutes)
 }
 
 #[tauri::command]
@@ -242,6 +259,12 @@ fn toggle_popup(app: &AppHandle, anchor: Rect) {
     show_popup(app, Some(anchor));
 }
 
+/// A reminder started ringing: bring up the popup on the ringing timer.
+fn ring(app: &AppHandle) {
+    show_popup(app, None);
+    let _ = app.emit("navigate", "ring");
+}
+
 fn open_web_page(app: &AppHandle) {
     let url = core::state(app).web.status().local_url;
     if let Some(url) = url {
@@ -259,11 +282,26 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let web = MenuItem::with_id(app, "web", "Open web page", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    let timer = Submenu::with_items(
+        app,
+        "Start timer",
+        true,
+        &[
+            &MenuItem::with_id(app, "timer:5", "5 min", true, None::<&str>)?,
+            &MenuItem::with_id(app, "timer:10", "10 min", true, None::<&str>)?,
+            &MenuItem::with_id(app, "timer:25", "25 min (Pomodoro)", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "timers", "Timers…", true, None::<&str>)?,
+        ],
+    )?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
+    let sep3 = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
-        &[&on, &off, &sep1, &open, &web, &settings, &sep2, &quit],
+        &[
+            &on, &off, &sep1, &timer, &sep2, &open, &web, &settings, &sep3, &quit,
+        ],
     )?;
 
     let mut tray = TrayIconBuilder::with_id("main")
@@ -293,8 +331,16 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
                 show_popup(app, None);
                 let _ = app.emit("navigate", "settings");
             }
+            "timers" => {
+                show_popup(app, None);
+                let _ = app.emit("navigate", "timers");
+            }
             "quit" => app.exit(0),
-            _ => {}
+            id => {
+                if let Some(minutes) = id.strip_prefix("timer:").and_then(|m| m.parse().ok()) {
+                    quick_timer(app, minutes);
+                }
+            }
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -312,6 +358,23 @@ fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     }
     tray.build(app)?;
     Ok(())
+}
+
+/// A tray quick timer: rings on every light, flashing them once effects are OK'd.
+fn quick_timer(app: &AppHandle, minutes: f64) {
+    let action = if core::effects_acknowledged(app) {
+        TimerAction::Flash
+    } else {
+        TimerAction::Remind
+    };
+    let input = TimerInput {
+        minutes: Some(minutes),
+        action: Some(action),
+        ..Default::default()
+    };
+    if let Err(e) = core::start_timer(app, input) {
+        eprintln!("Could not start a timer: {e}");
+    }
 }
 
 // ---- startup --------------------------------------------------------------
@@ -338,6 +401,7 @@ fn main() {
             MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),
         ))
+        .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
             let settings = settings::load();
             let bulbs = bulbs::Manager::new();
@@ -347,6 +411,7 @@ fn main() {
                 settings: Mutex::new(settings.clone()),
                 bulbs: bulbs.clone(),
                 effects: effects::Effects::new(),
+                timers: timers::Timers::load(),
                 web: server::WebServer::new(),
                 last_hidden_ms: AtomicU64::new(0),
                 popup_generation: AtomicU64::new(0),
@@ -371,11 +436,13 @@ fn main() {
             }
             core::apply_theme(&handle, &settings.theme);
 
-            // Push state changes to the popup, coalescing bursts.
+            // Push state changes to the popup, coalescing bursts, and keep the
+            // tray tooltip on the next timer.
             let mut changes = bulbs.subscribe();
             let h = handle.clone();
             tauri::async_runtime::spawn(async move {
                 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+                let mut tooltip = String::new();
                 loop {
                     if let Err(RecvError::Closed) = changes.recv().await {
                         break;
@@ -383,8 +450,17 @@ fn main() {
                     tokio::time::sleep(Duration::from_millis(12)).await;
                     while matches!(changes.try_recv(), Ok(_) | Err(TryRecvError::Lagged(_))) {}
                     let _ = h.emit("snapshot", core::snapshot(&h));
+                    let next = timers::tooltip(&core::state(&h).timers.list());
+                    if next != tooltip
+                        && let Some(tray) = h.tray_by_id("main")
+                    {
+                        let _ = tray.set_tooltip(Some(&next));
+                        tooltip = next;
+                    }
                 }
             });
+
+            timers::spawn_scheduler(handle.clone(), ring);
 
             let h = handle.clone();
             let web = settings.web.clone();
@@ -411,6 +487,9 @@ fn main() {
             apply_scene,
             save_scene,
             delete_scene,
+            start_timer,
+            cancel_timer,
+            extend_timer,
             get_settings,
             save_settings,
             hide_window,
