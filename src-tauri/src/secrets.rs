@@ -38,21 +38,45 @@ pub fn set_tapo_password(username: &str, password: &str) -> Result<(), String> {
 }
 
 pub fn hash_web_password(password: &str) -> Result<String, String> {
-    use argon2::password_hash::{PasswordHasher, SaltString, rand_core::OsRng};
-    let salt = SaltString::generate(&mut OsRng);
-    argon2::Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
+    use argon2::{PasswordHash, PasswordHasher};
+    // A random salt comes from the OS (argon2's default `getrandom` feature).
+    PasswordHasher::<PasswordHash>::hash_password(&argon2::Argon2::default(), password.as_bytes())
         .map(|hash| hash.to_string())
         .map_err(|e| format!("Could not hash the web password: {e}"))
 }
 
+/// Check a password against a stored PHC string. The algorithm, version and cost
+/// come from the string, so hashes saved by earlier versions keep working.
 pub fn verify_web_password(password: &str, hash: &str) -> bool {
-    use argon2::password_hash::{PasswordHash, PasswordVerifier};
-    PasswordHash::new(hash)
-        .map(|parsed| {
-            argon2::Argon2::default()
-                .verify_password(password.as_bytes(), &parsed)
-                .is_ok()
-        })
-        .unwrap_or(false)
+    use argon2::PasswordVerifier;
+    argon2::Argon2::default()
+        .verify_password(password.as_bytes(), hash)
+        .is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn web_passwords_round_trip() {
+        let hash = hash_web_password("correct horse").unwrap();
+        assert!(hash.starts_with("$argon2id$v=19$"), "{hash}");
+        assert!(verify_web_password("correct horse", &hash));
+        assert!(!verify_web_password("wrong", &hash));
+        assert_ne!(
+            hash,
+            hash_web_password("correct horse").unwrap(),
+            "fresh salt each time"
+        );
+    }
+
+    #[test]
+    fn verifies_hashes_with_other_parameters() {
+        // Reference Argon2id vector (64 MiB, t=2): stored hashes keep their own cost settings.
+        let hash = "$argon2id$v=19$m=65536,t=2,p=1$c29tZXNhbHQ$CTFhFdXPJO1aFaMaO6Mm5c8y7cJHAph8ArZWb2GRPPc";
+        assert!(verify_web_password("password", hash));
+        assert!(!verify_web_password("Password", hash));
+        assert!(!verify_web_password("password", "not a hash"));
+    }
 }
